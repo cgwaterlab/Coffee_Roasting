@@ -6,7 +6,7 @@ from datetime import datetime
 import io
 
 # --- 설정 및 스타일 ---
-st.set_page_config(page_title="Saemmulter Roasting Log", layout="wide")
+st.set_page_config(page_title="Clean Groundwater Tech Roasting Log", layout="wide")
 
 # 한글 폰트 설정
 try:
@@ -145,7 +145,7 @@ with c2:
 with c3:
     gas = st.number_input("가스압", 0.0, 15.0, 0.0, step=0.1)
 with c4:
-    evt = st.selectbox("이벤트", ["기록", "Input (투입)", "TP", "Yellowing", "1st Pop", "2nd Pop", "Drop"])
+    evt = st.selectbox("이벤트", ["기록", "Input", "TP(Turning Point)", "Yellowing", "1st Pop", "2nd Pop", "Drop"])
 with c5:
     st.write("")
     st.write("")
