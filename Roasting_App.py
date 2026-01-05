@@ -6,7 +6,7 @@ from datetime import datetime
 import io
 
 # --- 설정 및 스타일 ---
-st.set_page_config(page_title="Clean Groundwater Tech Roasting Log", layout="wide")
+st.set_page_config(page_title="Roasting Log", layout="wide")
 
 # 한글 폰트 설정
 try:
@@ -16,7 +16,7 @@ except:
 plt.rcParams['axes.unicode_minus'] = False
 
 # 기본 저장 파일
-DEFAULT_DATA_FILE = 'saemmulter_roasting_db.csv'
+DEFAULT_DATA_FILE = 'Roasting_default.csv'
 
 # --- [함수] CSV 파일 스마트 읽기 ---
 def load_and_standardize_csv(file, file_name_fallback):
@@ -85,6 +85,7 @@ Time(sec),Temp(C),Gas,Event
 60,90,5.0,TP
 120,105,4.5,
 300,150,4.0,Yellowing
+420,165,3.0,Cinnamon
 540,192,2.0,1st Pop
 600,205,0,Drop
 """
@@ -134,6 +135,9 @@ with st.expander("1. 로스팅 정보 설정", expanded=True):
 
 if 'points' not in st.session_state: st.session_state.points = [] 
 
+# 이벤트 목록 정의 (입력과 수정 모두 사용)
+EVENT_OPTIONS = ["Input Green Beans", "TP", "Yellowing", "Cinnamon Color", "1st Pop", "2nd Pop", "Drop"]
+
 st.subheader("2. 볶은 기록(Roasting) 입력")
 c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 2, 1])
 with c1:
@@ -145,7 +149,7 @@ with c2:
 with c3:
     gas = st.number_input("가스압", 0.0, 15.0, 0.0, step=0.1)
 with c4:
-    evt = st.selectbox("이벤트", ["기록", "Input (투입)", "TP", "Yellowing", "Cinnamon (시나몬)", "1st Pop", "2nd Pop", "Drop"])
+    evt = st.selectbox("이벤트", ["기록"] + EVENT_OPTIONS)
 with c5:
     st.write("")
     st.write("")
@@ -155,18 +159,54 @@ with c5:
             "Event": evt if evt != "기록" else None, "Roast_ID": roast_id
         })
 
+# --- [수정된 부분] 데이터 편집기 (Data Editor) ---
+if st.session_state.points:
+    st.write("---")
+    st.markdown("##### 📝 데이터 수정 (엑셀처럼 클릭해서 수정하세요)")
+    
+    df_to_edit = pd.DataFrame(st.session_state.points)
+    
+    # st.data_editor를 사용하여 편집 기능 제공
+    edited_df = st.data_editor(
+        df_to_edit,
+        num_rows="dynamic", # 행 추가/삭제 가능
+        use_container_width=True,
+        column_config={
+            "Time": st.column_config.NumberColumn("시간(초)", min_value=0, format="%d"),
+            "Temp": st.column_config.NumberColumn("온도(℃)", min_value=0, format="%d"),
+            "Gas": st.column_config.NumberColumn("가스압", min_value=0, max_value=15, step=0.1, format="%.1f"),
+            "Event": st.column_config.SelectboxColumn(
+                "이벤트",
+                options=EVENT_OPTIONS,
+                help="이벤트를 선택하세요",
+                required=False
+            )
+        },
+        key="editor"
+    )
+
+    # 수정된 데이터가 있으면 session_state 업데이트 (그래프 즉시 반영을 위해)
+    # data_editor는 변경 시 자동 rerun되므로 session state만 맞춰주면 됨
+    if not df_to_edit.equals(edited_df):
+        st.session_state.points = edited_df.to_dict('records')
+        st.rerun()
+
 # --- 그래프 그리기 ---
-st.write("---")
 fig, ax1 = plt.subplots(figsize=(12, 7))
 ax2 = ax1.twinx()
 
 if st.session_state.points:
-    curr_df = pd.DataFrame(st.session_state.points)
+    # 편집된 최신 데이터 사용
+    curr_df = pd.DataFrame(st.session_state.points).sort_values('Time')
+    
     ax1.plot(curr_df['Time'], curr_df['Temp'], marker='o', markersize=8, color='#c0392b', linewidth=2, label=f'Current: {roast_id}')
     ax2.plot(curr_df['Time'], curr_df['Gas'], drawstyle='steps-post', marker='x', markersize=8, linestyle='--', color='#2980b9', alpha=0.7, label='Gas')
+    
     for _, row in curr_df.iterrows():
         if row['Event']:
-            ax1.annotate(row['Event'], (row['Time'], row['Temp']), xytext=(0, 15), textcoords='offset points', ha='center', fontsize=11, weight='bold', bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red"))
+            ax1.annotate(row['Event'], (row['Time'], row['Temp']), 
+                         xytext=(0, 15), textcoords='offset points', ha='center', 
+                         fontsize=11, weight='bold', bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red"))
 
 if selected_ids and not full_history_df.empty:
     colors = plt.cm.tab10.colors 
@@ -193,19 +233,14 @@ st.pyplot(fig)
 st.subheader("3. 종료 및 저장 (열량 분석)")
 c1, c2, c3 = st.columns([1, 2, 1])
 
-# [추가 기능] 열량 계산 변수
 calculated_energy = None
 
 with c1:
     r_weight = st.number_input("배출 무게(g)", 0.0)
     
-    # 배출 무게가 입력되면 자동으로 계산
     if r_weight > 0 and green_weight > 0:
         loss_weight = green_weight - r_weight
-        # 열량 계산 (가정: 물 잠열 2260 J/g, 원두 비열 1.6 J/gK, 상온 25도)
-        # 1. 증발 잠열 (대부분 수분 손실로 가정)
         q_latent = loss_weight * 2260 
-        # 2. 가열 현열 (마지막 온도 기준)
         last_temp = st.session_state.points[-1]['Temp'] if st.session_state.points else 200
         q_sensible = r_weight * 1.6 * (last_temp - 25)
         
@@ -227,7 +262,6 @@ with c3:
         if st.session_state.points:
             save_df = pd.DataFrame(st.session_state.points)
             
-            # 메타데이터 준비
             meta_energy = calculated_energy if calculated_energy else "계산안됨"
             
             csv_buffer = io.StringIO()
