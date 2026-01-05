@@ -246,6 +246,7 @@ c1, c2, c3 = st.columns([1, 2, 1])
 
 calculated_energy = None
 
+# (1) 열량 계산 로직
 with c1:
     r_weight = st.number_input("배출 무게(g)", 0.0)
     
@@ -262,33 +263,53 @@ with c1:
         st.caption(f"(증발: {q_latent/1000:.1f} kJ + 가열: {q_sensible/1000:.1f} kJ)")
         st.caption(f"수율: {(r_weight/green_weight)*100:.1f}%")
 
+# (2) 파일명 및 메모 입력
 with c2:
     notes = st.text_input("메모", placeholder="맛, 특이사항")
     save_name = st.text_input("파일명", value=f"Roasting_{today}_{bean_name}")
 
+# (3) 저장 및 다운로드 로직 (핵심 수정 부분)
 with c3:
-    st.write("")
-    st.write("")
-    if st.button("💾 저장하기", type="primary"):
-        if st.session_state.points:
-            save_df = pd.DataFrame(st.session_state.points)
-            
-            meta_energy = calculated_energy if calculated_energy else "계산안됨"
-            
-            csv_buffer = io.StringIO()
-            csv_buffer.write(f"파일명,{save_name}\n날짜,{datetime.now().strftime('%Y-%m-%d')}\n원두,{bean_name}\n")
-            csv_buffer.write(f"결과무게,{r_weight}\n흡수열량,{meta_energy}\n비고,{notes}\n\n")
-            
-            save_df[['Time', 'Temp', 'Gas', 'Event']].rename(columns={'Time':'Time(sec)','Temp':'Temp(C)'}).to_csv(csv_buffer, index=False)
-            
-            with open(f"{save_name}.csv", "w", encoding="utf-8-sig") as f: f.write(csv_buffer.getvalue())
-            
+    st.write("") # 줄맞춤
+    st.write("") 
+    
+    # 데이터가 있을 때만 저장 준비
+    if st.session_state.points:
+        # A. 저장할 CSV 데이터 미리 생성 (문자열)
+        save_df = pd.DataFrame(st.session_state.points)
+        meta_energy = calculated_energy if calculated_energy else "계산안됨"
+        
+        csv_buffer = io.StringIO()
+        # 메타데이터 기록
+        csv_buffer.write(f"파일명,{save_name}\n날짜,{datetime.now().strftime('%Y-%m-%d')}\n원두,{bean_name}\n")
+        csv_buffer.write(f"결과무게,{r_weight}\n흡수열량,{meta_energy}\n비고,{notes}\n\n")
+        # 데이터 기록
+        save_df[['Time', 'Temp', 'Gas', 'Event']].rename(columns={'Time':'Time(sec)','Temp':'Temp(C)'}).to_csv(csv_buffer, index=False)
+        
+        # 인코딩 (한글 깨짐 방지)
+        csv_data = csv_buffer.getvalue().encode('utf-8-sig')
+
+        # B. 콜백 함수 정의 (버튼 클릭 시 서버 DB 저장 및 초기화 수행)
+        def save_to_server_and_clear():
+            # 1. 통합 DB 파일에 저장 (서버 측 백업)
             save_df['Roast_ID'] = roast_id
             mode = 'a' if os.path.exists(DEFAULT_DATA_FILE) else 'w'
             header = not os.path.exists(DEFAULT_DATA_FILE)
             save_df.to_csv(DEFAULT_DATA_FILE, mode=mode, header=header, index=False, encoding='utf-8-sig')
-
-            st.success(f"저장 완료! (열량: {meta_energy})")
+            
+            # 2. 데이터 초기화
             st.session_state.points = []
-            st.rerun()
-        else: st.error("데이터 없음")
+            st.success("서버 저장 및 초기화 완료!")
+
+        # C. 다운로드 버튼 생성 (누르면 파일 다운로드 + 콜백 함수 실행)
+        st.download_button(
+            label="💾 저장 및 다운로드",
+            data=csv_data,
+            file_name=f"{save_name}.csv",
+            mime="text/csv",
+            type="primary",
+            on_click=save_to_server_and_clear
+        )
+    else:
+        st.button("💾 저장 및 다운로드", disabled=True)
+        st.caption("데이터가 없습니다.")
