@@ -15,12 +15,17 @@ except:
     plt.rcParams['font.family'] = 'AppleGothic'
 plt.rcParams['axes.unicode_minus'] = False
 
-# 기본 저장 파일
-DEFAULT_DATA_FILE = 'Roasting_default.csv'
+# 기본 저장 파일 (통합 DB)
+DEFAULT_DATA_FILE = 'saemmulter_roasting_db.csv'
 
-# --- [함수] CSV 파일 스마트 읽기 ---
+# --- [핵심 함수] CSV 파일 스마트 읽기 (Parser Upgrade) ---
 def load_and_standardize_csv(file, file_name_fallback):
+    """
+    복잡한 CSV 구조(상단 메타데이터 + 중간 헤더)를 자동으로 파악하여
+    표준 형식(Time, Temp, Gas, Event) 데이터프레임으로 변환합니다.
+    """
     try:
+        # 1. 파일 내용 읽기 (인코딩 자동 감지)
         file.seek(0)
         try:
             content = file.read().decode('utf-8-sig')
@@ -29,22 +34,35 @@ def load_and_standardize_csv(file, file_name_fallback):
             content = file.read().decode('cp949', errors='ignore')
             
         lines = content.splitlines()
+        
+        # 2. 실제 데이터가 시작되는 '헤더 행' 찾기
         header_row_idx = 0
         extracted_id = None
         
         for i, line in enumerate(lines):
             line_lower = line.lower()
+            
+            # (옵션) 메타데이터에서 원두 이름 추출 시도
             if "원두" in line or "bean" in line_lower:
                 parts = line.split(',')
                 if len(parts) > 1 and parts[1].strip():
                     extracted_id = parts[1].strip()
 
-            if ('time' in line_lower or '시간' in line_lower) and \
-               ('temp' in line_lower or '온도' in line_lower):
+            # [핵심] 헤더 키워드 탐색: Time(sec) 또는 시간 / Temp(C) 또는 온도가 있는 줄 찾기
+            # 콤마(,)로 구분된 셀 중에 time과 temp 관련 단어가 있는지 확인
+            cells = [c.strip().lower() for c in line.split(',')]
+            has_time = any('time' in c or '시간' in c for c in cells)
+            has_temp = any('temp' in c or '온도' in c for c in cells)
+            
+            if has_time and has_temp:
                 header_row_idx = i
                 break
         
+        # 3. 찾은 위치부터 데이터프레임 로드
+        # io.StringIO를 사용하여 문자열을 파일 객체처럼 변환 후 읽기
         df = pd.read_csv(io.StringIO(content), header=header_row_idx)
+        
+        # 4. 컬럼명 표준화 (Time(sec) -> Time, Temp(C) -> Temp 등으로 매핑)
         df.columns = [str(c).strip() for c in df.columns]
         
         col_map = {}
@@ -56,23 +74,40 @@ def load_and_standardize_csv(file, file_name_fallback):
             elif 'event' in c_low or '이벤트' in c_low or '비고' in c_low: col_map[col] = 'Event'
         
         df.rename(columns=col_map, inplace=True)
-        if 'Time' not in df.columns or 'Temp' not in df.columns: return None 
+        
+        # 필수 데이터 확인
+        if 'Time' not in df.columns or 'Temp' not in df.columns:
+            return None 
 
+        # 5. 데이터 정제 (숫자 변환 및 결측치 처리)
         standard_df = pd.DataFrame()
         standard_df['Time'] = pd.to_numeric(df['Time'], errors='coerce')
         standard_df['Temp'] = pd.to_numeric(df['Temp'], errors='coerce')
-        standard_df['Gas'] = pd.to_numeric(df['Gas'], errors='coerce').fillna(0) if 'Gas' in df.columns else 0
-        standard_df['Event'] = df['Event'].fillna("") if 'Event' in df.columns else None
+        
+        if 'Gas' in df.columns:
+            standard_df['Gas'] = pd.to_numeric(df['Gas'], errors='coerce').fillna(0)
+        else:
+            standard_df['Gas'] = 0
+            
+        if 'Event' in df.columns:
+            standard_df['Event'] = df['Event'].fillna("")
+        else:
+            standard_df['Event'] = None
 
+        # 시간과 온도가 없는 행은 데이터가 아니므로 삭제 (메타데이터 영역 잔여물 등)
         standard_df = standard_df.dropna(subset=['Time', 'Temp'])
+        
+        # Roast_ID 설정
         final_id = extracted_id if extracted_id else file_name_fallback.replace('.csv', '')
         standard_df['Roast_ID'] = final_id
             
         return standard_df
-    except:
+
+    except Exception as e:
+        # 에러 발생 시 None 반환 (조용히 실패)
         return None
 
-# --- [함수] 템플릿 CSV 생성 ---
+# --- [함수] 템플릿 CSV 생성 (요청하신 양식 반영) ---
 def get_template_csv():
     template_str = """파일명,Geisha_Sample_01
 날짜,2026-01-01
@@ -94,17 +129,15 @@ Time(sec),Temp(C),Gas,Event
 # --- 1. 사이드바 ---
 st.sidebar.title("📂 로스팅 데이터 센터")
 
-# [수정됨] 템플릿 데이터를 미리 변수에 담고, 매개변수 이름을 명시하여 다운로드 버튼 생성
+# 템플릿 다운로드 버튼
 template_data = get_template_csv().encode('utf-8-sig')
-
 st.sidebar.download_button(
     label="📥 입력용 템플릿(CSV) 다운로드",
     data=template_data,
     file_name="roasting_template.csv",
     mime="text/csv",
-    key="download_template_btn" # 고유 키 추가 (버튼 오작동 방지)
+    key="download_template_btn"
 )
-
 st.sidebar.write("---")
 
 all_history = []
@@ -129,7 +162,7 @@ if all_history:
     selected_ids = st.sidebar.multiselect(f"데이터 선택 ({len(unique_ids)}개)", unique_ids)
 else:
     st.sidebar.info("데이터 없음")
-    
+
 # --- 2. 메인 ---
 st.title("☕ Smart Roasting Logger")
 
@@ -146,8 +179,7 @@ with st.expander("1. 로스팅 정보 설정", expanded=True):
 
 if 'points' not in st.session_state: st.session_state.points = [] 
 
-# 이벤트 목록 정의 (입력과 수정 모두 사용)
-EVENT_OPTIONS = ["Input Green Beans", "TP", "Yellowing", "Cinnamon Color", "1st Pop", "2nd Pop", "Drop"]
+EVENT_OPTIONS = ["Input Beans", "Turning Point", "Yellowing", "Cinnamon", "1st Pop", "2nd Pop", "Drop"]
 
 st.subheader("2. 볶은 기록(Roasting) 입력")
 c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 2, 1])
@@ -170,34 +202,26 @@ with c5:
             "Event": evt if evt != "기록" else None, "Roast_ID": roast_id
         })
 
-# --- [수정된 부분] 데이터 편집기 (Data Editor) ---
+# --- 데이터 편집기 ---
 if st.session_state.points:
     st.write("---")
     st.markdown("##### 📝 데이터 수정 (엑셀처럼 클릭해서 수정하세요)")
     
     df_to_edit = pd.DataFrame(st.session_state.points)
     
-    # st.data_editor를 사용하여 편집 기능 제공
     edited_df = st.data_editor(
         df_to_edit,
-        num_rows="dynamic", # 행 추가/삭제 가능
+        num_rows="dynamic",
         use_container_width=True,
         column_config={
             "Time": st.column_config.NumberColumn("시간(초)", min_value=0, format="%d"),
             "Temp": st.column_config.NumberColumn("온도(℃)", min_value=0, format="%d"),
             "Gas": st.column_config.NumberColumn("가스압", min_value=0, max_value=15, step=0.1, format="%.1f"),
-            "Event": st.column_config.SelectboxColumn(
-                "이벤트",
-                options=EVENT_OPTIONS,
-                help="이벤트를 선택하세요",
-                required=False
-            )
+            "Event": st.column_config.SelectboxColumn("이벤트", options=EVENT_OPTIONS, required=False)
         },
         key="editor"
     )
 
-    # 수정된 데이터가 있으면 session_state 업데이트 (그래프 즉시 반영을 위해)
-    # data_editor는 변경 시 자동 rerun되므로 session state만 맞춰주면 됨
     if not df_to_edit.equals(edited_df):
         st.session_state.points = edited_df.to_dict('records')
         st.rerun()
@@ -207,9 +231,7 @@ fig, ax1 = plt.subplots(figsize=(12, 7))
 ax2 = ax1.twinx()
 
 if st.session_state.points:
-    # 편집된 최신 데이터 사용
     curr_df = pd.DataFrame(st.session_state.points).sort_values('Time')
-    
     ax1.plot(curr_df['Time'], curr_df['Temp'], marker='o', markersize=8, color='#c0392b', linewidth=2, label=f'Current: {roast_id}')
     ax2.plot(curr_df['Time'], curr_df['Gas'], drawstyle='steps-post', marker='x', markersize=8, linestyle='--', color='#2980b9', alpha=0.7, label='Gas')
     
@@ -235,7 +257,7 @@ if selected_ids and not full_history_df.empty:
 ax1.set_xlabel("Time (Seconds)")
 ax1.set_ylabel("Temperature (℃)", color='#c0392b')
 ax2.set_ylabel("Gas Pressure", color='#2980b9')
-ax2.set_ylim(0, 10)
+ax2.set_ylim(0, 10) # 가스압 최대 10으로 제한
 ax1.grid(True, linestyle='--', alpha=0.5)
 ax1.legend(loc='upper left')
 st.pyplot(fig)
@@ -246,7 +268,6 @@ c1, c2, c3 = st.columns([1, 2, 1])
 
 calculated_energy = None
 
-# (1) 열량 계산 로직
 with c1:
     r_weight = st.number_input("배출 무게(g)", 0.0)
     
@@ -263,45 +284,38 @@ with c1:
         st.caption(f"(증발: {q_latent/1000:.1f} kJ + 가열: {q_sensible/1000:.1f} kJ)")
         st.caption(f"수율: {(r_weight/green_weight)*100:.1f}%")
 
-# (2) 파일명 및 메모 입력
 with c2:
     notes = st.text_input("메모", placeholder="맛, 특이사항")
     save_name = st.text_input("파일명", value=f"Roasting_{today}_{bean_name}")
 
-# (3) 저장 및 다운로드 로직 (핵심 수정 부분)
 with c3:
     st.write("") # 줄맞춤
     st.write("") 
     
-    # 데이터가 있을 때만 저장 준비
     if st.session_state.points:
-        # A. 저장할 CSV 데이터 미리 생성 (문자열)
+        # A. 저장할 CSV 데이터 미리 생성
         save_df = pd.DataFrame(st.session_state.points)
         meta_energy = calculated_energy if calculated_energy else "계산안됨"
         
         csv_buffer = io.StringIO()
-        # 메타데이터 기록
         csv_buffer.write(f"파일명,{save_name}\n날짜,{datetime.now().strftime('%Y-%m-%d')}\n원두,{bean_name}\n")
         csv_buffer.write(f"결과무게,{r_weight}\n흡수열량,{meta_energy}\n비고,{notes}\n\n")
-        # 데이터 기록
-        save_df[['Time', 'Temp', 'Gas', 'Event']].rename(columns={'Time':'Time(sec)','Temp':'Temp(C)'}).to_csv(csv_buffer, index=False)
         
-        # 인코딩 (한글 깨짐 방지)
+        # 헤더 이름을 요청하신대로 Time(sec), Temp(C)로 변환하여 저장
+        export_df = save_df[['Time', 'Temp', 'Gas', 'Event']].rename(columns={'Time':'Time(sec)', 'Temp':'Temp(C)'})
+        export_df.to_csv(csv_buffer, index=False)
+        
         csv_data = csv_buffer.getvalue().encode('utf-8-sig')
 
-        # B. 콜백 함수 정의 (버튼 클릭 시 서버 DB 저장 및 초기화 수행)
         def save_to_server_and_clear():
-            # 1. 통합 DB 파일에 저장 (서버 측 백업)
             save_df['Roast_ID'] = roast_id
             mode = 'a' if os.path.exists(DEFAULT_DATA_FILE) else 'w'
             header = not os.path.exists(DEFAULT_DATA_FILE)
             save_df.to_csv(DEFAULT_DATA_FILE, mode=mode, header=header, index=False, encoding='utf-8-sig')
             
-            # 2. 데이터 초기화
             st.session_state.points = []
             st.success("서버 저장 및 초기화 완료!")
 
-        # C. 다운로드 버튼 생성 (누르면 파일 다운로드 + 콜백 함수 실행)
         st.download_button(
             label="💾 저장 및 다운로드",
             data=csv_data,
