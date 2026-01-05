@@ -8,14 +8,14 @@ import io
 # --- 설정 및 스타일 ---
 st.set_page_config(page_title="Saemmulter Roasting Log", layout="wide")
 
-# 한글 폰트 설정 (Windows/Mac 호환)
+# 한글 폰트 설정
 try:
     plt.rcParams['font.family'] = 'Malgun Gothic' 
 except:
     plt.rcParams['font.family'] = 'AppleGothic'
 plt.rcParams['axes.unicode_minus'] = False
 
-# 기본 저장 파일 (통합 DB)
+# 기본 저장 파일
 DEFAULT_DATA_FILE = 'saemmulter_roasting_db.csv'
 
 # --- [함수] CSV 파일 스마트 읽기 ---
@@ -74,7 +74,6 @@ def load_and_standardize_csv(file, file_name_fallback):
 
 # --- [함수] 템플릿 CSV 생성 ---
 def get_template_csv():
-    # 샘플 데이터가 포함된 템플릿
     template_str = """파일명,Geisha_Sample_01
 날짜,2026-01-01
 원두,Geisha_Panama
@@ -93,14 +92,7 @@ Time(sec),Temp(C),Gas,Event
 
 # --- 1. 사이드바 ---
 st.sidebar.title("📂 로스팅 데이터 센터")
-
-# (1) 템플릿 다운로드 버튼 (맨 위 배치)
-st.sidebar.download_button(
-    label="📥 입력용 템플릿(CSV) 다운로드",
-    data=get_template_csv().encode('utf-8-sig'),
-    file_name="roasting_template.csv",
-    mime="text/csv",
-)
+st.sidebar.download_button("📥 입력용 템플릿(CSV) 다운로드", get_template_csv().encode('utf-8-sig'), "roasting_template.csv", "text/csv")
 st.sidebar.write("---")
 
 all_history = []
@@ -168,39 +160,23 @@ st.write("---")
 fig, ax1 = plt.subplots(figsize=(12, 7))
 ax2 = ax1.twinx()
 
-# A. 현재 데이터
 if st.session_state.points:
     curr_df = pd.DataFrame(st.session_state.points)
-    # [수정] 마커 크기 확대 (markersize=8)
-    ax1.plot(curr_df['Time'], curr_df['Temp'], marker='o', markersize=8, 
-             color='#c0392b', linewidth=2, label=f'Current: {roast_id}')
-    
-    # [수정] 가스압: 계단식(drawstyle='steps-post') + 마커 확대
-    ax2.plot(curr_df['Time'], curr_df['Gas'], drawstyle='steps-post', 
-             marker='x', markersize=8, linestyle='--', color='#2980b9', alpha=0.7, label='Gas')
-    
+    ax1.plot(curr_df['Time'], curr_df['Temp'], marker='o', markersize=8, color='#c0392b', linewidth=2, label=f'Current: {roast_id}')
+    ax2.plot(curr_df['Time'], curr_df['Gas'], drawstyle='steps-post', marker='x', markersize=8, linestyle='--', color='#2980b9', alpha=0.7, label='Gas')
     for _, row in curr_df.iterrows():
         if row['Event']:
-            ax1.annotate(row['Event'], (row['Time'], row['Temp']), 
-                         xytext=(0, 15), textcoords='offset points', ha='center', 
-                         fontsize=11, weight='bold', bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red"))
+            ax1.annotate(row['Event'], (row['Time'], row['Temp']), xytext=(0, 15), textcoords='offset points', ha='center', fontsize=11, weight='bold', bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red"))
 
-# B. 비교 데이터
 if selected_ids and not full_history_df.empty:
     colors = plt.cm.tab10.colors 
     for i, pid in enumerate(selected_ids):
         p_data = full_history_df[full_history_df['Roast_ID'] == pid].sort_values('Time')
         if not p_data.empty:
             color = colors[i % len(colors)]
-            # 비교 데이터도 마커 표시 (markersize=4)
-            ax1.plot(p_data['Time'], p_data['Temp'], marker='.', markersize=5, 
-                     linestyle='-', linewidth=1, color=color, alpha=0.5, label=f'{pid}')
-            
+            ax1.plot(p_data['Time'], p_data['Temp'], marker='.', markersize=5, linestyle='-', linewidth=1, color=color, alpha=0.5, label=f'{pid}')
             if 'Gas' in p_data.columns and p_data['Gas'].sum() > 0:
-                 # 비교 가스압도 계단식
-                 ax2.plot(p_data['Time'], p_data['Gas'], drawstyle='steps-post', 
-                          linestyle=':', linewidth=1, color=color, alpha=0.3)
-
+                 ax2.plot(p_data['Time'], p_data['Gas'], drawstyle='steps-post', linestyle=':', linewidth=1, color=color, alpha=0.3)
             pop_pt = p_data[p_data['Event'].astype(str).str.contains('Pop', na=False, case=False)]
             if not pop_pt.empty:
                  ax1.scatter(pop_pt['Time'], pop_pt['Temp'], marker='*', s=150, color=color, zorder=10, edgecolors='black')
@@ -213,23 +189,51 @@ ax1.grid(True, linestyle='--', alpha=0.5)
 ax1.legend(loc='upper left')
 st.pyplot(fig)
 
-# --- 저장 ---
-st.subheader("3. 종료 및 저장")
+# --- 3. 열량 계산 및 저장 ---
+st.subheader("3. 종료 및 저장 (열량 분석)")
 c1, c2, c3 = st.columns([1, 2, 1])
+
+# [추가 기능] 열량 계산 변수
+calculated_energy = None
+
 with c1:
     r_weight = st.number_input("배출 무게(g)", 0.0)
-    if r_weight > 0: st.caption(f"수율: {(r_weight/green_weight)*100:.1f}%")
+    
+    # 배출 무게가 입력되면 자동으로 계산
+    if r_weight > 0 and green_weight > 0:
+        loss_weight = green_weight - r_weight
+        # 열량 계산 (가정: 물 잠열 2260 J/g, 원두 비열 1.6 J/gK, 상온 25도)
+        # 1. 증발 잠열 (대부분 수분 손실로 가정)
+        q_latent = loss_weight * 2260 
+        # 2. 가열 현열 (마지막 온도 기준)
+        last_temp = st.session_state.points[-1]['Temp'] if st.session_state.points else 200
+        q_sensible = r_weight * 1.6 * (last_temp - 25)
+        
+        q_total_kj = (q_latent + q_sensible) / 1000
+        calculated_energy = f"{q_total_kj:.1f} kJ"
+        
+        st.info(f"🔥 총 흡수 열량: {q_total_kj:.1f} kJ")
+        st.caption(f"(증발: {q_latent/1000:.1f} kJ + 가열: {q_sensible/1000:.1f} kJ)")
+        st.caption(f"수율: {(r_weight/green_weight)*100:.1f}%")
+
 with c2:
     notes = st.text_input("메모", placeholder="맛, 특이사항")
     save_name = st.text_input("파일명", value=f"Roasting_{today}_{bean_name}")
+
 with c3:
     st.write("")
     st.write("")
     if st.button("💾 저장하기", type="primary"):
         if st.session_state.points:
             save_df = pd.DataFrame(st.session_state.points)
+            
+            # 메타데이터 준비
+            meta_energy = calculated_energy if calculated_energy else "계산안됨"
+            
             csv_buffer = io.StringIO()
-            csv_buffer.write(f"파일명,{save_name}\n날짜,{datetime.now().strftime('%Y-%m-%d')}\n원두,{bean_name}\n결과무게,{r_weight}\n비고,{notes}\n\n")
+            csv_buffer.write(f"파일명,{save_name}\n날짜,{datetime.now().strftime('%Y-%m-%d')}\n원두,{bean_name}\n")
+            csv_buffer.write(f"결과무게,{r_weight}\n흡수열량,{meta_energy}\n비고,{notes}\n\n")
+            
             save_df[['Time', 'Temp', 'Gas', 'Event']].rename(columns={'Time':'Time(sec)','Temp':'Temp(C)'}).to_csv(csv_buffer, index=False)
             
             with open(f"{save_name}.csv", "w", encoding="utf-8-sig") as f: f.write(csv_buffer.getvalue())
@@ -239,7 +243,7 @@ with c3:
             header = not os.path.exists(DEFAULT_DATA_FILE)
             save_df.to_csv(DEFAULT_DATA_FILE, mode=mode, header=header, index=False, encoding='utf-8-sig')
 
-            st.success(f"저장 완료: {save_name}.csv")
+            st.success(f"저장 완료! (열량: {meta_energy})")
             st.session_state.points = []
             st.rerun()
         else: st.error("데이터 없음")
