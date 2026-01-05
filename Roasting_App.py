@@ -93,7 +93,18 @@ Time(sec),Temp(C),Gas,Event
 
 # --- 1. 사이드바 ---
 st.sidebar.title("📂 로스팅 데이터 센터")
-st.sidebar.download_button("📥 입력용 템플릿(CSV) 다운로드", get_template_csv().encode('utf-8-sig'), "roasting_template.csv", "text/csv")
+
+# [수정됨] 템플릿 데이터를 미리 변수에 담고, 매개변수 이름을 명시하여 다운로드 버튼 생성
+template_data = get_template_csv().encode('utf-8-sig')
+
+st.sidebar.download_button(
+    label="📥 입력용 템플릿(CSV) 다운로드",
+    data=template_data,
+    file_name="roasting_template.csv",
+    mime="text/csv",
+    key="download_template_btn" # 고유 키 추가 (버튼 오작동 방지)
+)
+
 st.sidebar.write("---")
 
 all_history = []
@@ -118,7 +129,7 @@ if all_history:
     selected_ids = st.sidebar.multiselect(f"데이터 선택 ({len(unique_ids)}개)", unique_ids)
 else:
     st.sidebar.info("데이터 없음")
-
+    
 # --- 2. 메인 ---
 st.title("☕ Smart Roasting Logger")
 
