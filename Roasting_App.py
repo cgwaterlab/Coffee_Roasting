@@ -145,7 +145,7 @@ with c2:
 with c3:
     gas = st.number_input("가스압", 0.0, 15.0, 0.0, step=0.1)
 with c4:
-    evt = st.selectbox("이벤트", ["기록", "Input", "TP(Turning Point)", "Yellowing", "1st Pop", "2nd Pop", "Drop"])
+    evt = st.selectbox("이벤트", ["기록", "Input (투입)", "TP", "Yellowing", "Cinnamon (시나몬)", "1st Pop", "2nd Pop", "Drop"])
 with c5:
     st.write("")
     st.write("")
@@ -184,7 +184,7 @@ if selected_ids and not full_history_df.empty:
 ax1.set_xlabel("Time (Seconds)")
 ax1.set_ylabel("Temperature (℃)", color='#c0392b')
 ax2.set_ylabel("Gas Pressure", color='#2980b9')
-ax2.set_ylim(0, 15)
+ax2.set_ylim(0, 10)
 ax1.grid(True, linestyle='--', alpha=0.5)
 ax1.legend(loc='upper left')
 st.pyplot(fig)
