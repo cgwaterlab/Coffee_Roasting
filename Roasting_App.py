@@ -373,3 +373,31 @@ with c3:
     else:
         st.button("💾 저장 및 다운로드", disabled=True)
         st.caption("데이터가 없습니다.")
+
+# ==========================================
+# [추가] 사이드바 브랜딩 및 링크 연결
+# ==========================================
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔗 Links")
+
+# 1. 인스타그램 링크
+st.sidebar.link_button(
+    "📷 Instagram (@perucoffee.origins)", 
+    "https://instagram.com/perucoffee.origins"
+)
+
+# 2. HTML 로거(Netlify) 링크
+st.sidebar.link_button(
+    "🌐 자료 생성/기록 로거 (Web App)", 
+    "https://roastinglog.netlify.app/"
+)
+
+# 3. 로고 및 저작권 (선택사항)
+st.sidebar.markdown(
+    """
+    <div style="margin-top: 20px; text-align: center; color: gray; font-size: 0.8em;">
+        Powered by <strong>Peru Coffee Origins</strong>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
