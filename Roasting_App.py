@@ -170,7 +170,7 @@ if is_analysis_mode:
 
 # [B] & [C] 로스팅 모드 (Manual / Auto)
 else:
-    st.title("🔥 Professional Roasting")
+    st.title("🔥 Coffee Roasting Log V1.0")
     
     # 레퍼런스 선택
     if not full_df.empty:
