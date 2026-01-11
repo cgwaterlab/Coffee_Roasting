@@ -2,3 +2,6 @@ streamlit
 pandas
 matplotlib
 re
+os
+datetime
+io
