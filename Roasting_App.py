@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import os
 from datetime import datetime
 import io
+import re
+
 
 # --- 설정 및 스타일 ---
 st.set_page_config(page_title="Roasting Log", layout="wide")
@@ -21,91 +23,145 @@ DEFAULT_DATA_FILE = 'saemmulter_roasting_db.csv'
 # --- [핵심 함수] CSV 파일 스마트 읽기 (Parser Upgrade) ---
 def load_and_standardize_csv(file, file_name_fallback):
     """
-    복잡한 CSV 구조(상단 메타데이터 + 중간 헤더)를 자동으로 파악하여
-    표준 형식(Time, Temp, Gas, Event) 데이터프레임으로 변환합니다.
+    - 상단 메타데이터 + 중간 헤더 + 데이터 구조 자동 파싱
+    - 콤마(,), 탭(\t), 세미콜론(;) 자동 감지
+    - 엑셀에서 저장된 '탭 구분' CSV(사실상 TSV)도 정상 처리
+    - 어떤 행은 열이 더 많은 경우(예: 마지막에 99 같은 값) -> 초과 열 잘라냄
     """
     try:
-        # 1. 파일 내용 읽기 (인코딩 자동 감지)
+        # 1) 파일 내용 읽기 (바이트/문자 모두 대응 + 인코딩 대응)
         file.seek(0)
-        try:
-            content = file.read().decode('utf-8-sig')
-        except:
-            file.seek(0)
-            content = file.read().decode('cp949', errors='ignore')
-            
-        lines = content.splitlines()
-        
-        # 2. 실제 데이터가 시작되는 '헤더 행' 찾기
-        header_row_idx = 0
-        extracted_id = None
-        
-        for i, line in enumerate(lines):
-            line_lower = line.lower()
-            
-            # (옵션) 메타데이터에서 원두 이름 추출 시도
-            if "원두" in line or "bean" in line_lower:
-                parts = line.split(',')
-                if len(parts) > 1 and parts[1].strip():
-                    extracted_id = parts[1].strip()
+        raw = file.read()
 
-            # [핵심] 헤더 키워드 탐색: Time(sec) 또는 시간 / Temp(C) 또는 온도가 있는 줄 찾기
-            # 콤마(,)로 구분된 셀 중에 time과 temp 관련 단어가 있는지 확인
-            cells = [c.strip().lower() for c in line.split(',')]
-            has_time = any('time' in c or '시간' in c for c in cells)
-            has_temp = any('temp' in c or '온도' in c for c in cells)
-            
-            if has_time and has_temp:
-                header_row_idx = i
+        if isinstance(raw, str):
+            content = raw
+        else:
+            try:
+                content = raw.decode("utf-8-sig")
+            except Exception:
+                try:
+                    content = raw.decode("cp949", errors="ignore")
+                except Exception:
+                    content = raw.decode("latin-1", errors="ignore")
+
+        lines = content.splitlines()
+
+        # 2) 헤더 행 + 구분자 찾기
+        #    (Time/시간 AND Temp/온도 포함된 줄을 찾고, 해당 줄의 구분자도 결정)
+        delims = ["\t", ",", ";"]
+        header_row_idx = None
+        delimiter = ","
+        extracted_id = None
+
+        for i, line in enumerate(lines):
+            if not line.strip():
+                continue
+
+            # (옵션) 메타데이터에서 원두/bean 이름 추출 (탭/콤마/세미콜론 모두 대응)
+            if ("원두" in line) or ("bean" in line.lower()):
+                parts = [p.strip() for p in re.split(r"[\t,;]", line)]
+                if len(parts) > 1 and parts[1]:
+                    extracted_id = parts[1]
+
+            # 헤더 탐색: 가능한 구분자별로 셀 분리 후 time/temp 포함 여부 확인
+            for d in delims:
+                cells = [c.strip().lower() for c in line.split(d)]
+                has_time = any(("time" in c) or ("시간" in c) for c in cells)
+                has_temp = any(("temp" in c) or ("온도" in c) for c in cells)
+                if has_time and has_temp:
+                    header_row_idx = i
+                    delimiter = d
+                    break
+
+            if header_row_idx is not None:
                 break
-        
-        # 3. 찾은 위치부터 데이터프레임 로드
-        # io.StringIO를 사용하여 문자열을 파일 객체처럼 변환 후 읽기
-        df = pd.read_csv(io.StringIO(content), header=header_row_idx)
-        
-        # 4. 컬럼명 표준화 (Time(sec) -> Time, Temp(C) -> Temp 등으로 매핑)
+
+        if header_row_idx is None:
+            return None
+
+        # 3) pandas.read_csv 대신 csv.reader로 "가변 열" 안전 파싱
+        import csv as pycsv
+        reader = pycsv.reader(io.StringIO(content), delimiter=delimiter)
+        rows = list(reader)
+
+        def _strip_row(r):
+            return [str(c).strip() for c in r]
+
+        header = _strip_row(rows[header_row_idx])
+
+        # 엑셀 탭 파일은 뒤에 빈 컬럼이 딸려오는 경우가 많아서 제거
+        while header and header[-1] == "":
+            header.pop()
+
+        if not header:
+            return None
+
+        data_rows = []
+        for r in rows[header_row_idx + 1:]:
+            r = _strip_row(r)
+            if not any(cell for cell in r):
+                continue
+
+            # 행의 컬럼 수가 헤더보다 많으면 초과 부분 제거(예: '1st Pop 끝' 뒤에 99)
+            if len(r) > len(header):
+                r = r[:len(header)]
+            # 부족하면 빈칸으로 패딩
+            elif len(r) < len(header):
+                r = r + [""] * (len(header) - len(r))
+
+            data_rows.append(r)
+
+        df = pd.DataFrame(data_rows, columns=header)
+
+        # 4) 컬럼명 표준화
         df.columns = [str(c).strip() for c in df.columns]
-        
+
         col_map = {}
         for col in df.columns:
             c_low = col.lower()
-            if 'time' in c_low or '시간' in c_low: col_map[col] = 'Time'
-            elif 'temp' in c_low or '온도' in c_low: col_map[col] = 'Temp'
-            elif 'gas' in c_low or '가스' in c_low or '압력' in c_low: col_map[col] = 'Gas'
-            elif 'event' in c_low or '이벤트' in c_low or '비고' in c_low: col_map[col] = 'Event'
-        
+            if ("time" in c_low) or ("시간" in c_low):
+                col_map[col] = "Time"
+            elif ("temp" in c_low) or ("온도" in c_low):
+                col_map[col] = "Temp"
+            elif ("gas" in c_low) or ("가스" in c_low) or ("압력" in c_low):
+                col_map[col] = "Gas"
+            elif ("event" in c_low) or ("이벤트" in c_low) or ("비고" in c_low):
+                col_map[col] = "Event"
+
         df.rename(columns=col_map, inplace=True)
-        
-        # 필수 데이터 확인
-        if 'Time' not in df.columns or 'Temp' not in df.columns:
-            return None 
 
-        # 5. 데이터 정제 (숫자 변환 및 결측치 처리)
+        # 필수 확인
+        if ("Time" not in df.columns) or ("Temp" not in df.columns):
+            return None
+
+        # 5) 데이터 정제
         standard_df = pd.DataFrame()
-        standard_df['Time'] = pd.to_numeric(df['Time'], errors='coerce')
-        standard_df['Temp'] = pd.to_numeric(df['Temp'], errors='coerce')
-        
-        if 'Gas' in df.columns:
-            standard_df['Gas'] = pd.to_numeric(df['Gas'], errors='coerce').fillna(0)
-        else:
-            standard_df['Gas'] = 0
-            
-        if 'Event' in df.columns:
-            standard_df['Event'] = df['Event'].fillna("")
-        else:
-            standard_df['Event'] = None
+        standard_df["Time"] = pd.to_numeric(df["Time"], errors="coerce")
+        standard_df["Temp"] = pd.to_numeric(df["Temp"], errors="coerce")
 
-        # 시간과 온도가 없는 행은 데이터가 아니므로 삭제 (메타데이터 영역 잔여물 등)
-        standard_df = standard_df.dropna(subset=['Time', 'Temp'])
-        
-        # Roast_ID 설정
-        final_id = extracted_id if extracted_id else file_name_fallback.replace('.csv', '')
-        standard_df['Roast_ID'] = final_id
-            
+        if "Gas" in df.columns:
+            standard_df["Gas"] = pd.to_numeric(df["Gas"], errors="coerce").fillna(0)
+        else:
+            standard_df["Gas"] = 0
+
+        if "Event" in df.columns:
+            standard_df["Event"] = df["Event"].fillna("").astype(str)
+            standard_df.loc[standard_df["Event"].str.lower() == "nan", "Event"] = ""
+        else:
+            standard_df["Event"] = ""
+
+        # 숫자 필드 없는 줄 제거 (메타데이터 잔여물 방지)
+        standard_df = standard_df.dropna(subset=["Time", "Temp"])
+
+        # Roast_ID
+        final_id = extracted_id if extracted_id else file_name_fallback.replace(".csv", "")
+        standard_df["Roast_ID"] = final_id
+
         return standard_df
 
-    except Exception as e:
-        # 에러 발생 시 None 반환 (조용히 실패)
+    except Exception:
         return None
+
 
 # --- [함수] 템플릿 CSV 생성 (요청하신 양식 반영) ---
 def get_template_csv():
