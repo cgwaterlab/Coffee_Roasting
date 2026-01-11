@@ -19,12 +19,11 @@ DEFAULT_DATA_FILE = 'saemmulter_roasting_db.csv'
 
 # --- [함수] 날짜 포맷 변환 (YYYYJanDD) ---
 def get_intl_date_str():
-    """현재 날짜를 2026Jan01 형식으로 반환 (서버 로케일 무관하게 영어 강제)"""
     now = datetime.now()
     months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     return f"{now.year}{months[now.month]}{now.day:02d}"
 
-# --- [함수] CSV 파싱 (기존 유지) ---
+# --- [함수] CSV 파싱 ---
 def load_and_standardize_csv(file, file_name_fallback):
     try:
         file.seek(0)
@@ -86,14 +85,13 @@ def load_and_standardize_csv(file, file_name_fallback):
         return out
     except: return None
 
-# --- [함수] 템플릿 생성 ---
 def get_template_csv():
     return """파일명,Sample_01\n날짜,2026-Jan-01\n원두,Geisha\n결과무게,215\n비고,템플릿\n\nTime(sec),Temp(C),Gas,Event\n0,200,0.5,Charge\n60,90,5.0,TP\n300,150,4.0,Yellowing\n540,192,2.0,1C Start\n600,205,0,Drop"""
 
-# --- [신규 함수] 이벤트 감지 및 시간 포맷팅 ---
+# --- [신규] 이벤트 감지 및 포맷 ---
 def check_is_crack(event_str):
     e = event_str.lower().strip()
-    is_1c = any(k in e for k in ["1c", "1st", "first", "pop"]) and not ("end" in e)
+    is_1c = any(k in e for k in ["1c", "1st", "first", "pop"]) and not ("end" in e) and not ("2" in e)
     is_2c = any(k in e for k in ["2c", "2nd", "second"])
     return is_1c, is_2c
 
@@ -112,7 +110,7 @@ st.sidebar.markdown("---")
 st.sidebar.caption("🛠️ 유틸리티")
 c3, c4 = st.sidebar.columns(2)
 with c3: st.download_button("📥 템플릿", get_template_csv().encode('utf-8-sig'), "template.csv", "text/csv", use_container_width=True)
-with c4: st.link_button("⚡ Roasting Logger", "https://roastinglog.netlify.app/", use_container_width=True)
+with c4: st.link_button("⚡ 웹 로거", "https://roastinglog.netlify.app/", use_container_width=True)
 st.sidebar.markdown("---")
 st.sidebar.caption("📂 데이터 센터")
 
@@ -141,7 +139,6 @@ st.title("☕ Roasting Analysis Center")
 with st.expander("1. 설정", expanded=True):
     c1, c2, c3 = st.columns(3)
     with c1: 
-        # [수정] 날짜 포맷 YYYYJanDD 적용
         intl_date = get_intl_date_str() 
         bean_name = st.text_input("생두", value="Geisha")
     with c2: roast_id = st.text_input("ID", value=f"{bean_name}_{intl_date}")
@@ -172,55 +169,81 @@ st.write("---")
 fig, ax1 = plt.subplots(figsize=(12, 7))
 ax2 = ax1.twinx()
 
+# --- [그래프 그리기 함수: 핵심 수정 부분] ---
 def plot_roast_data(ax_temp, ax_gas, df, color_temp, color_gas, label_prefix, is_main=False):
+    # 1. 1차 팝 시점 찾기
     t_1c, t_2c = None, None
     idx_1c = None
+    
     for i, row in df.iterrows():
         e = str(row['Event']).lower()
         if not e or e == "nan": continue
         is_1c_evt, is_2c_evt = check_is_crack(e)
-        if is_1c_evt and t_1c is None: t_1c = row['Time']; idx_1c = i
-        if is_2c_evt and t_2c is None: t_2c = row['Time']
+        if is_1c_evt and t_1c is None:
+            t_1c = row['Time']
+            idx_1c = i # 1차 팝이 시작된 행의 인덱스 저장
+        if is_2c_evt and t_2c is None:
+            t_2c = row['Time']
 
+    # 2. 온도 그래프 그리기 (두께 조절)
     if idx_1c is not None and is_main:
-        ax_temp.plot(df.iloc[:idx_1c+1]['Time'], df.iloc[:idx_1c+1]['Temp'], marker='o', markersize=6, color=color_temp, linewidth=2, label=label_prefix)
-        ax_temp.plot(df.iloc[idx_1c:]['Time'], df.iloc[idx_1c:]['Temp'], marker='o', markersize=6, color=color_temp, linewidth=4)
+        # [수정됨] 1차 팝 이후 두께를 6으로 설정 (3배 두껍게)
+        # 구간 1: 처음 ~ 1차 팝 (두께 2)
+        ax_temp.plot(df.iloc[:idx_1c+1]['Time'], df.iloc[:idx_1c+1]['Temp'], 
+                     marker='o', markersize=6, color=color_temp, linewidth=2, label=label_prefix)
+        # 구간 2: 1차 팝 ~ 끝 (두께 6)
+        ax_temp.plot(df.iloc[idx_1c:]['Time'], df.iloc[idx_1c:]['Temp'], 
+                     marker='o', markersize=6, color=color_temp, linewidth=6) # 여기가 핵심 수정 사항
     else:
+        # 팝이 없거나 비교용 그래프일 때
         marker = 'o' if is_main else '.'
         lw = 2 if is_main else 1
-        ax_temp.plot(df['Time'], df['Temp'], marker=marker, markersize=6 if is_main else 4, color=color_temp, linewidth=lw, label=label_prefix, alpha=1.0 if is_main else 0.5)
+        ax_temp.plot(df['Time'], df['Temp'], marker=marker, markersize=6 if is_main else 4, 
+                     color=color_temp, linewidth=lw, label=label_prefix, alpha=1.0 if is_main else 0.5)
 
+    # 가스압 그래프
     if is_main or (not is_main and 'Gas' in df.columns and df['Gas'].sum() > 0):
         ls = '--' if is_main else ':'
         alpha = 0.7 if is_main else 0.3
-        ax_gas.plot(df['Time'], df['Gas'], drawstyle='steps-post', marker='x', markersize=5, linestyle=ls, color=color_gas, alpha=alpha, label='Gas' if is_main else None)
+        ax_gas.plot(df['Time'], df['Gas'], drawstyle='steps-post', marker='x', markersize=5, 
+                    linestyle=ls, color=color_gas, alpha=alpha, label='Gas' if is_main else None)
 
+    # 3. 이벤트 마커 (별표 색상 고정)
     for _, row in df.iterrows():
         e = str(row['Event'])
         if not e or e == "nan" or e == "None": continue
+        
         label_text = e
         if "drop" in e.lower() or "배출" in e:
             if t_2c is not None: label_text = f"Drop (+2C {format_mmss(row['Time']-t_2c)})"
             elif t_1c is not None: label_text = f"Drop (+1C {format_mmss(row['Time']-t_1c)})"
         
         is_1c_evt, is_2c_evt = check_is_crack(e)
+        
+        # [수정됨] 팝 이벤트는 무조건 황금색(gold) 별 + 검은 테두리
         if is_1c_evt or is_2c_evt:
-            ax_temp.scatter(row['Time'], row['Temp'], marker='*', s=250, color='gold', edgecolors='black', zorder=10)
-            ax_temp.annotate(label_text, (row['Time'], row['Temp']), xytext=(0, 15), textcoords='offset points', ha='center', weight='bold', color='black')
+            ax_temp.scatter(row['Time'], row['Temp'], marker='*', s=350, 
+                            facecolors='gold', edgecolors='black', linewidths=1.5, zorder=10) # 색상 고정
+            ax_temp.annotate(label_text, (row['Time'], row['Temp']), xytext=(0, 20), 
+                             textcoords='offset points', ha='center', weight='bold', color='black')
         else:
             if "drop" in e.lower() or "배출" in e:
-                ax_temp.annotate(label_text, (row['Time'], row['Temp']), xytext=(0, 20), textcoords='offset points', ha='center', weight='bold', color='purple', fontsize=11)
+                ax_temp.annotate(label_text, (row['Time'], row['Temp']), xytext=(0, 20), 
+                                 textcoords='offset points', ha='center', weight='bold', color='purple', fontsize=11)
             else:
-                ax_temp.annotate(label_text, (row['Time'], row['Temp']), xytext=(0, 15), textcoords='offset points', ha='center', fontsize=9, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.8))
+                ax_temp.annotate(label_text, (row['Time'], row['Temp']), xytext=(0, 15), 
+                                 textcoords='offset points', ha='center', fontsize=9, 
+                                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.8))
 
+# --- 그래프 실행 ---
 if st.session_state.points:
-    curr_df = pd.DataFrame(st.session_state.points).sort_values('Time')
+    curr_df = pd.DataFrame(st.session_state.points).sort_values('Time').reset_index(drop=True)
     plot_roast_data(ax1, ax2, curr_df, '#c0392b', '#2980b9', f'Current: {roast_id}', is_main=True)
 
 if selected_ids and not full_df.empty:
     colors = plt.cm.tab10.colors 
     for i, pid in enumerate(selected_ids):
-        p = full_df[full_df['Roast_ID'] == pid].sort_values('Time')
+        p = full_df[full_df['Roast_ID'] == pid].sort_values('Time').reset_index(drop=True)
         if not p.empty:
             c = colors[i % len(colors)]
             plot_roast_data(ax1, ax2, p, c, c, f'{pid}', is_main=False)
@@ -242,7 +265,6 @@ with c1:
 
 with c2: 
     note = st.text_input("메모", placeholder="맛, 특이사항")
-    # [수정] 파일명 기본값 변경
     intl_date = get_intl_date_str()
     save_name = st.text_input("파일명", value=f"Roasting_{intl_date}_{bean_name}")
 
@@ -251,7 +273,6 @@ with c3:
     if st.session_state.points:
         sdf = pd.DataFrame(st.session_state.points)
         buf = io.StringIO()
-        # [수정] 메타데이터 날짜 포맷도 변경
         buf.write(f"파일명,{save_name}\n날짜,{get_intl_date_str()}\n원두,{bean_name}\n결과무게,{rw}\n흡수열량,{calc_E}\n비고,{note}\n\n")
         sdf[['Time','Temp','Gas','Event']].rename(columns={'Time':'Time(sec)','Temp':'Temp(C)'}).to_csv(buf, index=False)
         csv_d = buf.getvalue().encode('utf-8-sig')
@@ -262,6 +283,5 @@ with c3:
             sdf.to_csv(DEFAULT_DATA_FILE, mode=m, header=h, index=False, encoding='utf-8-sig')
             st.session_state.points = []; st.success("저장 완료!")
         
-        # [수정] 텍스트 변경: 엑셀 -> CSV
         st.download_button("💾 CSV 저장 및 다운로드", csv_d, f"{save_name}.csv", "text/csv", type="primary", on_click=save, use_container_width=True)
     else: st.button("💾 CSV 저장", disabled=True, use_container_width=True)
