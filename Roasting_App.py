@@ -6,7 +6,7 @@ from datetime import datetime
 import io
 import re
 import csv
-import matplotlib.patheffects as pe # 텍스트 테두리 효과용
+import matplotlib.patheffects as pe
 
 # --- 설정 및 스타일 ---
 st.set_page_config(page_title="Roasting Analysis Center", layout="wide", page_icon="☕")
@@ -18,13 +18,12 @@ plt.rcParams['axes.unicode_minus'] = False
 
 DEFAULT_DATA_FILE = 'saemmulter_roasting_db.csv'
 
-# --- [함수] 날짜 포맷 변환 ---
+# --- 함수 모음 ---
 def get_intl_date_str():
     now = datetime.now()
     months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     return f"{now.year}{months[now.month]}{now.day:02d}"
 
-# --- [함수] CSV 파싱 (기존 유지) ---
 def load_and_standardize_csv(file, file_name_fallback):
     try:
         file.seek(0)
@@ -89,7 +88,6 @@ def load_and_standardize_csv(file, file_name_fallback):
 def get_template_csv():
     return """파일명,Sample_01\n날짜,2026-Jan-01\n원두,Geisha\n결과무게,215\n비고,템플릿\n\nTime(sec),Temp(C),Gas,Event\n0,200,0.5,Charge\n60,90,5.0,TP\n300,150,4.0,Yellowing\n540,192,2.0,1C Start\n600,205,0,Drop"""
 
-# --- [신규] 이벤트 감지 및 포맷 ---
 def check_is_crack(event_str):
     e = event_str.lower().strip()
     is_1c = any(k in e for k in ["1c", "1st", "first", "pop"]) and not ("end" in e) and not ("2" in e)
@@ -101,17 +99,26 @@ def format_mmss(seconds):
     s = int(seconds % 60)
     return f"{m}:{s:02d}"
 
-# --- 사이드바 ---
+# --- 사이드바 (요청하신 텍스트 포맷 반영) ---
 st.sidebar.markdown("## 🇵🇪 PERU COFFEE ORIGINS")
 st.sidebar.info("**페루의 Micro/Nano Lot 최상급 스페셜티 커피를 소개합니다.**\n\n지속 가능한 커피 문화를 위해 최고의 농장과 함께합니다.")
+
+# [수정] 버튼 텍스트 변경
 c1, c2 = st.sidebar.columns(2)
-with c1: st.link_button("🛍️ 스토어", "https://smartstore.naver.com/perucoffeeorigins", use_container_width=True)
-with c2: st.link_button("📷 인스타", "https://instagram.com/perucoffee.origins", use_container_width=True)
+with c1: 
+    st.link_button("🛍️ 스마트\n스토어", "https://smartstore.naver.com/perucoffeeorigins", use_container_width=True)
+with c2: 
+    st.link_button("📷 Instagram", "https://instagram.com/perucoffee.origins", use_container_width=True)
+
 st.sidebar.markdown("---")
 st.sidebar.caption("🛠️ 유틸리티")
 c3, c4 = st.sidebar.columns(2)
-with c3: st.download_button("📥 템플릿", get_template_csv().encode('utf-8-sig'), "template.csv", "text/csv", use_container_width=True)
-with c4: st.link_button("⚡ 웹 로거", "https://roastinglog.netlify.app/", use_container_width=True)
+with c3: 
+    st.download_button("📥 파일\n템플릿", get_template_csv().encode('utf-8-sig'), "template.csv", "text/csv", use_container_width=True)
+with c4: 
+    # 3줄 표현 시도 (Web / Roasting / Logger)
+    st.link_button("⚡ Web\nRoasting\nLogger", "https://roastinglog.netlify.app/", use_container_width=True)
+
 st.sidebar.markdown("---")
 st.sidebar.caption("📂 데이터 센터")
 
@@ -170,95 +177,81 @@ st.write("---")
 fig, ax1 = plt.subplots(figsize=(12, 7))
 ax2 = ax1.twinx()
 
-# --- [그래프 그리기 함수: 색상 동기화 및 겹침 방지] ---
+# --- [그래프 함수: 모든 라벨 박스 처리 및 색상 구분] ---
 def plot_roast_data(ax_temp, ax_gas, df, color_temp, color_gas, label_prefix, is_main=False):
     t_1c, t_2c = None, None
     idx_1c = None
     
-    # 1. 팝 시점 찾기
     for i, row in df.iterrows():
         e = str(row['Event']).lower()
         if not e or e == "nan": continue
         is_1c_evt, is_2c_evt = check_is_crack(e)
-        if is_1c_evt and t_1c is None:
-            t_1c = row['Time']
-            idx_1c = i
-        if is_2c_evt and t_2c is None:
-            t_2c = row['Time']
+        if is_1c_evt and t_1c is None: t_1c = row['Time']; idx_1c = i
+        if is_2c_evt and t_2c is None: t_2c = row['Time']
 
-    # 2. 선 그리기 (두께 8로 강화)
-    label_added = False
+    # 선 그리기
     if idx_1c is not None and is_main:
-        # 일반 구간
-        ax_temp.plot(df.iloc[:idx_1c+1]['Time'], df.iloc[:idx_1c+1]['Temp'], 
-                     marker='o', markersize=6, color=color_temp, linewidth=2, label=label_prefix)
-        # 디벨롭먼트 구간 (두께 8)
-        ax_temp.plot(df.iloc[idx_1c:]['Time'], df.iloc[idx_1c:]['Temp'], 
-                     marker='o', markersize=6, color=color_temp, linewidth=8, alpha=0.9) 
-        label_added = True
+        ax_temp.plot(df.iloc[:idx_1c+1]['Time'], df.iloc[:idx_1c+1]['Temp'], marker='o', markersize=6, color=color_temp, linewidth=2, label=label_prefix)
+        ax_temp.plot(df.iloc[idx_1c:]['Time'], df.iloc[idx_1c:]['Temp'], marker='o', markersize=6, color=color_temp, linewidth=8, alpha=0.9) 
     else:
         marker = 'o' if is_main else '.'
         lw = 2 if is_main else 1
-        ax_temp.plot(df['Time'], df['Temp'], marker=marker, markersize=6 if is_main else 4, 
-                     color=color_temp, linewidth=lw, label=label_prefix, alpha=1.0 if is_main else 0.5)
-        label_added = True
+        ax_temp.plot(df['Time'], df['Temp'], marker=marker, markersize=6 if is_main else 4, color=color_temp, linewidth=lw, label=label_prefix, alpha=1.0 if is_main else 0.5)
 
     if is_main or (not is_main and 'Gas' in df.columns and df['Gas'].sum() > 0):
         ls = '--' if is_main else ':'
         alpha = 0.7 if is_main else 0.3
-        ax_gas.plot(df['Time'], df['Gas'], drawstyle='steps-post', marker='x', markersize=5, 
-                    linestyle=ls, color=color_gas, alpha=alpha, label='Gas' if is_main else None)
+        ax_gas.plot(df['Time'], df['Gas'], drawstyle='steps-post', marker='x', markersize=5, linestyle=ls, color=color_gas, alpha=alpha, label='Gas' if is_main else None)
 
-    # 3. 텍스트 겹침 방지 (Zig-zag 배치 로직)
-    # 이벤트가 있는 포인트만 추출
+    # 이벤트 마커 및 라벨 (전부 박스 처리)
     event_points = []
     for _, row in df.iterrows():
         e = str(row['Event'])
-        if e and e != "nan" and e != "None":
-            event_points.append(row)
+        if e and e != "nan" and e != "None": event_points.append(row)
 
-    # 이벤트 루프
     for i, row in enumerate(event_points):
         e = str(row['Event'])
         label_text = e
+        is_drop = "drop" in e.lower() or "배출" in e
         
-        # Drop 시간 계산
-        if "drop" in e.lower() or "배출" in e:
+        if is_drop:
             if t_2c is not None: label_text = f"Drop (+2C {format_mmss(row['Time']-t_2c)})"
             elif t_1c is not None: label_text = f"Drop (+1C {format_mmss(row['Time']-t_1c)})"
         
         is_1c_evt, is_2c_evt = check_is_crack(e)
         
-        # [수정] 텍스트 위치 지능형 배치 (위/아래 번갈아 가며)
-        # 짝수번째 이벤트는 위로(+20), 홀수번째는 아래로(-25) 배치하여 겹침 최소화
+        # 텍스트 위치 (지그재그)
         y_offset = 25 if i % 2 == 0 else -30 
         va_align = 'bottom' if i % 2 == 0 else 'top'
-
-        # 텍스트 가독성 (흰색 테두리 효과)
-        path_eff = [pe.withStroke(linewidth=3, foreground="white")]
-
+        
+        # [핵심 수정] 박스 스타일 정의 (Color Coding)
+        # 1. 크랙 이벤트 (1C, 2C) -> 황금색 배경
         if is_1c_evt or is_2c_evt:
-            # [수정] 별표 색상 = 선 색상 (color_temp)
-            ax_temp.scatter(row['Time'], row['Temp'], marker='*', s=400, 
-                            facecolors=color_temp, edgecolors='black', linewidths=1.5, zorder=10)
-            
-            ax_temp.annotate(label_text, (row['Time'], row['Temp']), xytext=(0, y_offset), 
-                             textcoords='offset points', ha='center', va=va_align,
-                             weight='bold', color='black', fontsize=11, path_effects=path_eff)
+            box_props = dict(boxstyle="round,pad=0.3", fc="gold", ec="black", alpha=1.0)
+            text_color = "black"
+            font_weight = "bold"
+            # 별표 표시
+            ax_temp.scatter(row['Time'], row['Temp'], marker='*', s=400, facecolors=color_temp, edgecolors='black', linewidths=1.5, zorder=10)
+
+        # 2. 배출 이벤트 (Drop) -> 보라색 배경
+        elif is_drop:
+            box_props = dict(boxstyle="round,pad=0.3", fc="#9b59b6", ec="black", alpha=1.0) # 보라색
+            text_color = "white"
+            font_weight = "bold"
+            y_offset = 35 # Drop은 항상 위로
+
+        # 3. 일반 이벤트 (TP, Yellowing) -> 흰색 배경
         else:
-            if "drop" in e.lower() or "배출" in e:
-                # Drop은 항상 잘 보이게 위쪽 고정 + 보라색
-                ax_temp.annotate(label_text, (row['Time'], row['Temp']), xytext=(0, 30), 
-                                 textcoords='offset points', ha='center', weight='bold', 
-                                 color='purple', fontsize=12, path_effects=path_eff,
-                                 arrowprops=dict(arrowstyle="-", color='purple', alpha=0.5))
-            else:
-                # 일반 이벤트 (상자 + 화살표)
-                ax_temp.annotate(label_text, (row['Time'], row['Temp']), xytext=(0, y_offset), 
-                                 textcoords='offset points', ha='center', va=va_align, fontsize=9, 
-                                 color='black', weight='bold', path_effects=path_eff,
-                                 bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color_temp, alpha=0.9),
-                                 arrowprops=dict(arrowstyle="-", color=color_temp, alpha=0.5))
+            box_props = dict(boxstyle="round,pad=0.3", fc="white", ec=color_temp, alpha=0.9)
+            text_color = "black"
+            font_weight = "normal"
+
+        # 통합된 Annotate 함수 호출
+        ax_temp.annotate(label_text, (row['Time'], row['Temp']), xytext=(0, y_offset), 
+                            textcoords='offset points', ha='center', va=va_align,
+                            color=text_color, weight=font_weight, fontsize=10,
+                            bbox=box_props,
+                            arrowprops=dict(arrowstyle="-", color=color_temp, alpha=0.5))
 
 # --- 그래프 실행 ---
 if st.session_state.points:
