@@ -112,7 +112,7 @@ st.sidebar.markdown("---")
 st.sidebar.caption("🛠️ 유틸리티")
 c3, c4 = st.sidebar.columns(2)
 with c3: st.download_button("📥 템플릿", get_template_csv().encode('utf-8-sig'), "template.csv", "text/csv", use_container_width=True)
-with c4: st.link_button("⚡ 웹 로거", "https://roastinglog.netlify.app/", use_container_width=True)
+with c4: st.link_button("⚡ Roasting Logger", "https://roastinglog.netlify.app/", use_container_width=True)
 st.sidebar.markdown("---")
 st.sidebar.caption("📂 데이터 센터")
 
