@@ -9,14 +9,6 @@ import csv
 import time  # 시간 계산용
 import matplotlib.patheffects as pe
 
-# ✅ [추가] 1초 자동 갱신용 (없으면 자동으로 fallback 경고만 띄움)
-try:
-    from streamlit_autorefresh import st_autorefresh
-    HAS_AUTOREFRESH = True
-except Exception:
-    HAS_AUTOREFRESH = False
-
-
 # --- 설정 및 스타일 ---
 st.set_page_config(page_title="Roasting Analysis Center", layout="wide", page_icon="☕")
 
@@ -29,16 +21,13 @@ plt.rcParams['axes.unicode_minus'] = False
 
 DEFAULT_DATA_FILE = 'saemmulter_roasting_db.csv'
 
-
 # --- 함수 모음 ---
 def get_intl_date_str():
     now = datetime.now()
     months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     return f"{now.year}{months[now.month]}{now.day:02d}"
 
-
 def get_dtr_feedback(dtr):
-    """DTR 수치에 따른 맛 평가 멘트"""
     if dtr < 10:
         return "⚠️ 언더 디벨롭 (Under Developed): 풋내나 떫은 맛이 날 수 있어요. 시간을 조금 더 늘려보세요."
     elif dtr <= 15:
@@ -50,12 +39,10 @@ def get_dtr_feedback(dtr):
     else:
         return "🔥 다크 (Dark): 묵직한 바디감, 스모키함, 쌉쌀한 맛이 강조돼요."
 
-
 def format_mmss(seconds):
     m = int(seconds // 60)
     s = int(seconds % 60)
     return f"{m}:{s:02d}"
-
 
 def load_and_standardize_csv(file, file_name_fallback):
     try:
@@ -153,10 +140,8 @@ def load_and_standardize_csv(file, file_name_fallback):
     except:
         return None
 
-
 def get_template_csv():
     return """파일 이름,Sample_01\n날짜,2026-Jan-01\n원두 이름,Geisha\n결과무게,215\n비고,템플릿\n\nTime(sec),Temp(C),Gas,Event\n0,200,0.5,Charge\n60,90,5.0,TP\n300,150,4.0,Yellowing\n540,192,2.0,1C Start\n600,205,0,Drop"""
-
 
 def check_is_crack(event_str):
     e = event_str.lower().strip()
@@ -164,6 +149,11 @@ def check_is_crack(event_str):
     is_2c = any(k in e for k in ["2c", "2nd", "second"])
     return is_1c, is_2c
 
+def is_drop_event(e: str) -> bool:
+    if not e:
+        return False
+    s = str(e).lower().strip()
+    return ("drop" in s) or ("배출" in s)
 
 # --- 사이드바 ---
 st.sidebar.markdown("## 🇵🇪 PERU COFFEE ORIGINS")
@@ -212,19 +202,15 @@ full_df = pd.DataFrame()
 if all_history:
     full_df = pd.concat(all_history, ignore_index=True)
 
-# 전역 변수 설정
 selected_ids_analysis = []
 reference_id_roasting = None
 is_analysis_mode = (mode == "📊 데이터 분석 (Analysis)")
 is_manual_mode = (mode == "🔥 로스팅 (Manual)")
 is_auto_mode = (mode == "⏱️ 로스팅 + 시계 (Auto-Timer)")
 
-
 # ==========================================
 # 3. 모드별 로직
 # ==========================================
-
-# [A] 데이터 분석 모드
 if is_analysis_mode:
     st.title("📊 Data Analysis Center")
     if not full_df.empty:
@@ -232,12 +218,9 @@ if is_analysis_mode:
         selected_ids_analysis = st.sidebar.multiselect(f"비교할 그래프 선택 ({len(uids)}개)", uids)
     else:
         st.info("데이터가 없습니다. CSV 파일을 업로드하세요.")
-
-# [B] & [C] 로스팅 모드 (Manual / Auto)
 else:
     st.title("🔥 Coffee Roasting Log V1.0")
 
-    # 레퍼런스 선택
     if not full_df.empty:
         uids = list(full_df['Roast_ID'].unique())
         ref_options = ["(선택 안 함)"] + uids
@@ -245,7 +228,6 @@ else:
         if selected_ref != "(선택 안 함)":
             reference_id_roasting = selected_ref
 
-    # 셋업
     with st.expander("1. 로스팅 설정 (Setup)", expanded=True):
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -257,34 +239,31 @@ else:
             initial_temp = st.number_input("투입온도 (℃)", min_value=0, max_value=300, value=200, step=10)
             green_weight = st.number_input("생두 무게(g)", 250.0)
 
+    # ✅ 세션 상태
     if 'points' not in st.session_state:
         st.session_state.points = []
     if 'start_time' not in st.session_state:
         st.session_state.start_time = None
+    if 'timer_state' not in st.session_state:
+        st.session_state.timer_state = "idle"  # idle / running / stopped
+    if 'stop_elapsed' not in st.session_state:
+        st.session_state.stop_elapsed = None
 
-    # ✅ [수정] 예열 이벤트 추가 + Charge 선택 가능 유지
     EVT = ["예열(Preheat)", "Charge", "TP", "Yellowing", "Cinnamon", "1C Start", "1C End", "2C", "Drop"]
 
-    # --- [C] 자동 시간 모드 전용 로직 ---
+    # --- Auto Timer ---
     if is_auto_mode:
         st.subheader("2. 실시간 기록 (Auto Timer)")
 
-        # ✅ [핵심] 1초마다 자동 rerun (타이머가 실제로 흐름)
-        live_tick = st.checkbox("⏱️ 타이머 실시간 갱신 (1초)", value=True, key="live_tick")
-        if st.session_state.start_time and live_tick:
-            if HAS_AUTOREFRESH:
-                st_autorefresh(interval=1000, limit=None, key="auto_timer_refresh")
-            else:
-                st.warning("초 단위 자동 갱신을 위해 `pip install streamlit-autorefresh` 설치가 필요합니다.")
-
-        # 타이머 시작/리셋 버튼
-        t_col1, t_col2 = st.columns([1, 4])
+        t_col1, t_col2, t_col3 = st.columns([1, 3, 1])
         with t_col1:
-            if st.session_state.start_time is None:
+            if st.session_state.timer_state in ["idle"]:
                 if st.button("▶️ START (시작)", type="primary"):
                     st.session_state.start_time = time.time()
+                    st.session_state.timer_state = "running"
+                    st.session_state.stop_elapsed = None
 
-                    # ✅ [핵심] 시작과 동시에 '예열' 1줄 자동 기록 (Time=0)
+                    # ✅ 시작과 동시에 예열 0초 기록
                     st.session_state.points = [{
                         "Time": 0,
                         "Temp": int(initial_temp),
@@ -292,63 +271,90 @@ else:
                         "Event": "예열(Preheat)",
                         "Roast_ID": roast_id
                     }]
-
-                    # 기본 입력값도 세팅(선택)
-                    st.session_state.auto_temp = int(initial_temp)
-                    st.session_state.auto_gas = 0.0
-                    st.session_state.auto_evt = "기록"
-
                     st.rerun()
-            else:
+
+            elif st.session_state.timer_state in ["running", "stopped"]:
                 if st.button("⏹️ RESET (초기화)"):
                     st.session_state.start_time = None
+                    st.session_state.timer_state = "idle"
+                    st.session_state.stop_elapsed = None
                     st.session_state.points = []
                     st.rerun()
 
+        # ✅ 표시용 경과시간 (Drop이면 멈춤)
+        def get_elapsed_now():
+            if st.session_state.timer_state == "stopped" and st.session_state.stop_elapsed is not None:
+                return int(st.session_state.stop_elapsed)
+            if st.session_state.timer_state == "running" and st.session_state.start_time is not None:
+                return int(time.time() - st.session_state.start_time)
+            return 0
+
         with t_col2:
-            if st.session_state.start_time:
-                elapsed = int(time.time() - st.session_state.start_time)
-                st.metric("경과 시간", format_mmss(elapsed))
-            else:
-                st.info("시작 버튼을 누르면 타이머가 작동합니다. (시작 시 '예열'이 자동 기록됩니다)")
+            elapsed = get_elapsed_now()
+            st.metric("경과 시간", format_mmss(elapsed))
 
-        # 입력 폼 (시간 자동 계산)
-        if st.session_state.start_time:
-            now_elapsed = int(time.time() - st.session_state.start_time)
-
-            # ✅ [수정] 가스 입력을 버튼 밖으로 빼서 정상 입력되게 처리
-            c1, c2, c3, c4, c5 = st.columns([1.2, 1, 1, 2, 1])
-
-            with c1:
-                st.text_input("현재 시간", value=format_mmss(now_elapsed), disabled=True, key="auto_now")
-
-            with c2:
-                default_temp = int(st.session_state.points[-1]["Temp"]) if st.session_state.points else int(initial_temp)
-                temp = st.number_input("온도", 0, 300, int(st.session_state.get("auto_temp", default_temp)), key="auto_temp")
-
-            with c3:
-                last_gas = float(st.session_state.points[-1]["Gas"]) if st.session_state.points else 0.0
-                gas = st.number_input("가스", 0.0, 15.0, float(st.session_state.get("auto_gas", last_gas)), step=0.1, key="auto_gas")
-
-            with c4:
-                evt = st.selectbox("이벤트", ["기록"] + EVT, key="auto_evt")
-
-            with c5:
-                st.write("")
-                st.write("")
-                if st.button("기록 (Record)", type="primary", use_container_width=True):
-                    rec_time = int(time.time() - st.session_state.start_time)
-                    st.session_state.points.append({
-                        "Time": rec_time,
-                        "Temp": temp,
-                        "Gas": gas,
-                        "Event": evt if evt != "기록" else None,
-                        "Roast_ID": roast_id
-                    })
+        with t_col3:
+            # ✅ 00:00 고정처럼 보일 때를 위한 수동 갱신 버튼(누르면 rerun)
+            if st.session_state.timer_state == "running":
+                if st.button("↻ 갱신"):
                     st.rerun()
 
-    # --- [B] 수동 모드 로직 (기존 유지) ---
-    else:
+        if st.session_state.timer_state == "stopped":
+            st.info("✅ Drop이 기록되어 타이머가 정지되었습니다. (다시 시작하려면 RESET)")
+
+        # 입력 폼
+        can_record = (st.session_state.timer_state == "running")
+
+        c1, c2, c3, c4, c5 = st.columns([1.2, 1, 1, 2, 1])
+        with c1:
+            st.text_input("현재 시간(표시)", value=format_mmss(elapsed), disabled=True)
+
+        with c2:
+            default_temp = int(st.session_state.points[-1]["Temp"]) if st.session_state.points else int(initial_temp)
+            temp = st.number_input("온도", 0, 300, default_temp, disabled=not can_record, key="auto_temp")
+
+        with c3:
+            last_gas = float(st.session_state.points[-1]["Gas"]) if st.session_state.points else 0.0
+            gas = st.number_input("가스", 0.0, 15.0, last_gas, step=0.1, disabled=not can_record, key="auto_gas")
+
+        with c4:
+            evt = st.selectbox("이벤트", ["기록"] + EVT, disabled=not can_record, key="auto_evt")
+
+        with c5:
+            st.write("")
+            st.write("")
+            if st.button("기록 (Record)", type="primary", use_container_width=True, disabled=not can_record):
+                rec_time = int(time.time() - st.session_state.start_time)
+
+                chosen_evt = evt if evt != "기록" else None
+                st.session_state.points.append({
+                    "Time": rec_time,
+                    "Temp": temp,
+                    "Gas": gas,
+                    "Event": chosen_evt,
+                    "Roast_ID": roast_id
+                })
+
+                # ✅ Drop 기록 시 즉시 정지
+                if is_drop_event(chosen_evt):
+                    st.session_state.timer_state = "stopped"
+                    st.session_state.stop_elapsed = rec_time
+
+                st.rerun()
+
+        # ✅ “각 단계별 시간은 멈춰있게” → 기록된 이벤트 타임라인을 고정 표시
+        if st.session_state.points:
+            dfp = pd.DataFrame(st.session_state.points).sort_values("Time").reset_index(drop=True)
+            ev = dfp[dfp["Event"].notna() & (dfp["Event"].astype(str).str.strip() != "")]
+            if not ev.empty:
+                timeline = ev[["Event", "Time"]].copy()
+                timeline["Time(mm:ss)"] = timeline["Time"].apply(format_mmss)
+                timeline["Δprev(sec)"] = timeline["Time"].diff().fillna(0).astype(int)
+                st.markdown("##### ⏱️ 단계 타임라인(고정)")
+                st.dataframe(timeline[["Event", "Time(mm:ss)", "Time", "Δprev(sec)"]], use_container_width=True)
+
+    # --- Manual ---
+    elif is_manual_mode:
         st.subheader("2. 실시간 기록 (Manual Input)")
         c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 2, 1])
         with c1:
@@ -378,14 +384,23 @@ else:
             num_rows="dynamic",
             use_container_width=True,
             key="editor",
-            column_config={
-                "Event": st.column_config.SelectboxColumn("이벤트", options=EVT)
-            }
+            column_config={"Event": st.column_config.SelectboxColumn("이벤트", options=EVT)}
         )
         if not pd.DataFrame(st.session_state.points).equals(edited):
             st.session_state.points = edited.to_dict('records')
-            st.rerun()
 
+            # ✅ 에디터에서 Drop을 추가/삭제해도 타이머 상태가 맞게 따라가도록 보정
+            df_tmp = pd.DataFrame(st.session_state.points).sort_values("Time")
+            drop_rows = df_tmp[df_tmp["Event"].astype(str).apply(is_drop_event)]
+            if not drop_rows.empty and st.session_state.timer_state != "idle":
+                st.session_state.timer_state = "stopped"
+                st.session_state.stop_elapsed = int(drop_rows["Time"].max())
+            elif drop_rows.empty and st.session_state.timer_state == "stopped":
+                # Drop 삭제 시 다시 running으로(원치 않으면 이 else 블록 삭제하세요)
+                st.session_state.timer_state = "running"
+                st.session_state.stop_elapsed = None
+
+            st.rerun()
 
 # ==========================================
 # 4. 통합 그래프
@@ -396,7 +411,6 @@ ax2 = ax1.twinx()
 ax_ror = ax1.twinx()
 ax_ror.set_ylim(0, 150)
 ax_ror.axis('off')
-
 
 def plot_roast_data(ax_temp, ax_gas, ax_ror_bar, df, color_temp, color_gas, label_prefix, is_main=False, show_ror=False):
     t_1c, t_2c, idx_1c = None, None, None
@@ -411,14 +425,13 @@ def plot_roast_data(ax_temp, ax_gas, ax_ror_bar, df, color_temp, color_gas, labe
         if is_2c_evt and t_2c is None:
             t_2c = row['Time']
 
-    # 온도 선
     final_c_temp = color_temp if (is_main or is_analysis_mode) else "#bdc3c7"
     final_c_gas = color_gas if (is_main or is_analysis_mode) else "#bdc3c7"
     line_style = '-' if (is_main or is_analysis_mode) else '--'
     alpha_val = 0.9 if is_main else 0.7
 
     if idx_1c is not None and (is_main or is_analysis_mode):
-        ax_temp.plot(df.iloc[:idx_1c + 1]['Time'], df.iloc[:idx_1c + 1]['Temp'], marker='o', markersize=6,
+        ax_temp.plot(df.iloc[:idx_1c+1]['Time'], df.iloc[:idx_1c+1]['Temp'], marker='o', markersize=6,
                      color=final_c_temp, linewidth=2, label=label_prefix)
         ax_temp.plot(df.iloc[idx_1c:]['Time'], df.iloc[idx_1c:]['Temp'], marker='o', markersize=6,
                      color=final_c_temp, linewidth=8, alpha=alpha_val)
@@ -427,37 +440,32 @@ def plot_roast_data(ax_temp, ax_gas, ax_ror_bar, df, color_temp, color_gas, labe
         ax_temp.plot(df['Time'], df['Temp'], marker=marker, markersize=5, linestyle=line_style,
                      color=final_c_temp, linewidth=2, label=label_prefix, alpha=alpha_val)
 
-    # 가스압
     if (is_main or is_analysis_mode) and 'Gas' in df.columns and df['Gas'].sum() > 0:
         ax_gas.plot(df['Time'], df['Gas'], drawstyle='steps-post', marker='x', markersize=5, linestyle=':',
                     color=final_c_gas, alpha=0.5, label='Gas' if is_main else None)
 
-    # RoR Zone Bar + 수치 표시
     if show_ror and len(df) > 1:
         prev_ror = 0
         for i in range(1, len(df)):
             curr = df.iloc[i]
-            prev = df.iloc[i - 1]
+            prev = df.iloc[i-1]
             dt = (curr['Time'] - prev['Time']) / 60.0
             dtemp = curr['Temp'] - prev['Temp']
             if dt > 0:
                 ror = dtemp / dt
-                c = "#2ecc71"  # Green
+                c = "#2ecc71"
                 if ror < 5:
-                    c = "#3498db"  # Blue
+                    c = "#3498db"
                 elif ror > prev_ror + 2:
-                    c = "#e74c3c"  # Red
+                    c = "#e74c3c"
 
                 bar_x = curr['Time'] - (curr['Time'] - prev['Time']) / 2
                 ax_ror_bar.bar(bar_x, ror, width=(curr['Time'] - prev['Time']), color=c, alpha=0.6)
-
                 if ror > 3:
                     ax_ror_bar.text(bar_x, ror + 2, f"{ror:.1f}", ha='center', va='bottom', fontsize=8,
                                     color=c, fontweight='bold')
-
                 prev_ror = ror
 
-    # 이벤트
     if is_main or is_analysis_mode:
         event_points = []
         for _, row in df.iterrows():
@@ -468,13 +476,13 @@ def plot_roast_data(ax_temp, ax_gas, ax_ror_bar, df, color_temp, color_gas, labe
         for i, row in enumerate(event_points):
             e = str(row['Event'])
             label_text = e
-            is_drop = "drop" in e.lower() or "배출" in e
+            is_drop = is_drop_event(e)
 
             if is_drop:
                 if t_2c:
-                    label_text = f"Drop (+2C {format_mmss(row['Time'] - t_2c)})"
+                    label_text = f"Drop (+2C {format_mmss(row['Time']-t_2c)})"
                 elif t_1c:
-                    label_text = f"Drop (+1C {format_mmss(row['Time'] - t_1c)})"
+                    label_text = f"Drop (+1C {format_mmss(row['Time']-t_1c)})"
 
             is_1c_evt, is_2c_evt = check_is_crack(e)
             y_offset = 25 if i % 2 == 0 else -30
@@ -498,7 +506,6 @@ def plot_roast_data(ax_temp, ax_gas, ax_ror_bar, df, color_temp, color_gas, labe
                                  textcoords='offset points', ha='center', va=va_align, color='black',
                                  fontsize=10, bbox=box_props, arrowprops=dict(arrowstyle="-", color=final_c_temp))
 
-
 # 그래프 실행
 if is_analysis_mode:
     if selected_ids_analysis and not full_df.empty:
@@ -509,16 +516,15 @@ if is_analysis_mode:
                 c = colors[i % len(colors)]
                 plot_roast_data(ax1, ax2, ax_ror, p, c, c, f'{pid}', is_main=True, show_ror=False)
 else:
-    # 로스팅 모드 (Manual / Auto)
     if reference_id_roasting and not full_df.empty:
         ref_data = full_df[full_df['Roast_ID'] == reference_id_roasting].sort_values('Time').reset_index(drop=True)
         if not ref_data.empty:
             plot_roast_data(ax1, ax2, ax_ror, ref_data, '#bdc3c7', '#bdc3c7',
                             f'Ref: {reference_id_roasting}', is_main=False, show_ror=False)
 
-    if st.session_state.points:
+    if st.session_state.get("points"):
         curr_df = pd.DataFrame(st.session_state.points).sort_values('Time').reset_index(drop=True)
-        plot_roast_data(ax1, ax2, ax_ror, curr_df, '#c0392b', '#2980b9', f'Current: {roast_id}',
+        plot_roast_data(ax1, ax2, ax_ror, curr_df, '#c0392b', '#2980b9', f'Current: {curr_df.iloc[0].get("Roast_ID","")}',
                         is_main=True, show_ror=True)
 
 ax1.set_xlabel("Time (sec)")
@@ -529,14 +535,12 @@ ax1.grid(True, ls='--', alpha=0.5)
 ax1.legend(loc='upper left')
 st.pyplot(fig)
 
-
-# --- [공통] 저장 섹션 & DTR 평가 ---
+# --- 저장 섹션 & DTR 평가 ---
 if not is_analysis_mode:
     st.subheader("3. 저장 (Save)")
     c1, c2, c3 = st.columns([1, 2, 1])
     calc_E = None
 
-    # DTR 자동 계산 (평가용)
     current_dtr = 0
     dtr_feedback = ""
     if st.session_state.points:
@@ -558,7 +562,7 @@ if not is_analysis_mode:
         if rw > 0 and green_weight > 0:
             lw = green_weight - rw
             last_t = st.session_state.points[-1]['Temp'] if st.session_state.points else initial_temp
-            q = (lw * 2260 + rw * 1.6 * (last_t - 25)) / 1000
+            q = (lw*2260 + rw*1.6*(last_t-25))/1000
             calc_E = f"{q:.1f} kJ"
             st.info(f"🔥 열량: {calc_E}")
 
@@ -580,12 +584,8 @@ if not is_analysis_mode:
 
             sdf = pd.DataFrame(st.session_state.points)
             buf = io.StringIO()
-            buf.write(
-                f"파일 이름,{save_name}\n날짜,{get_intl_date_str()}\n원두 이름,{bean_name}\n결과무게,{rw}\n흡수열량,{calc_E}\n비고,{note}\n\n"
-            )
-            sdf[['Time', 'Temp', 'Gas', 'Event']].rename(columns={'Time': 'Time(sec)', 'Temp': 'Temp(C)'}).to_csv(
-                buf, index=False
-            )
+            buf.write(f"파일 이름,{save_name}\n날짜,{get_intl_date_str()}\n원두 이름,{bean_name}\n결과무게,{rw}\n흡수열량,{calc_E}\n비고,{note}\n\n")
+            sdf[['Time','Temp','Gas','Event']].rename(columns={'Time':'Time(sec)','Temp':'Temp(C)'}).to_csv(buf, index=False)
             csv_d = buf.getvalue().encode('utf-8-sig')
 
             def save():
@@ -594,6 +594,9 @@ if not is_analysis_mode:
                 h = not os.path.exists(DEFAULT_DATA_FILE)
                 sdf.to_csv(DEFAULT_DATA_FILE, mode=m, header=h, index=False, encoding='utf-8-sig')
                 st.session_state.points = []
+                st.session_state.timer_state = "idle"
+                st.session_state.start_time = None
+                st.session_state.stop_elapsed = None
                 st.success("저장 완료!")
 
             st.download_button("💾 CSV 저장 및 다운로드", csv_d, f"{save_name}.csv", "text/csv",
