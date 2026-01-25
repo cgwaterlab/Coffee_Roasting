@@ -5,3 +5,4 @@ matplotlib
 pillow
 reportlab
 tzdata; platform_system=="Windows"
+streamlit-autorefresh
