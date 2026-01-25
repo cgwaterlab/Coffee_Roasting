@@ -47,11 +47,12 @@ def get_dtr_feedback(dtr):
         return "🔥 다크 (Dark): 묵직한 바디감, 스모키함, 쌉쌀한 맛이 강조돼요."
 
 
+# --- format_mmss 함수는 기존과 동일하게 유지하거나 아래처럼 활용 ---
 def format_mmss(seconds):
+    if seconds is None: return "0:00"
     m = int(seconds // 60)
     s = int(seconds % 60)
     return f"{m}:{s:02d}"
-
 
 def load_and_standardize_csv(file, file_name_fallback):
     try:
@@ -306,107 +307,107 @@ else:
 
     EVT = ["예열(Preheat)", "Charge", "TP", "Yellowing", "Cinnamon", "1C Start", "1C End", "2C", "Drop"]
 
-    # -----------------------------------------------------
-    # Auto Timer
-    # -----------------------------------------------------
-    if is_auto_mode:
-        st.subheader("2. 실시간 기록 (Auto Timer)")
+# -----------------------------------------------------
+# Auto Timer 모드 내 수정 부분
+# -----------------------------------------------------
+if is_auto_mode:
+    st.subheader("2. 실시간 기록 (Auto Timer)")
 
-        t_col1, t_col2, t_col3 = st.columns([1, 3, 1])
-        with t_col1:
-            if st.session_state.timer_state == "idle":
-                if st.button("▶️ START (시작)", type="primary"):
-                    st.session_state.start_time = time.time()
-                    st.session_state.timer_state = "running"
-                    st.session_state.stop_elapsed = None
+    # 상단 대시보드: 전체 시간 및 주요 구간 정보
+    elapsed = get_elapsed_now()
+    
+    # ✅ 전체 로스팅 시간 및 대시보드 구성
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("⏱️ 전체 로스팅 시간", format_mmss(elapsed))
+    
+    # 구간 경과 시간 계산용 로직
+    last_event_time = 0
+    last_event_name = "시작"
+    if st.session_state.points:
+        # 마지막으로 기록된 이벤트 찾기
+        ev_only = [p for p in st.session_state.points if p["Event"]]
+        if ev_only:
+            last_event_time = ev_only[-1]["Time"]
+            last_event_name = ev_only[-1]["Event"]
+    
+    with m2:
+        interval = elapsed - last_event_time
+        st.metric(f"⏳ [{last_event_name}] 이후 경과", format_mmss(interval))
+    
+    with m3:
+        # ROR(온도 변화율) 계산 (최근 30초 기준 등 간단히 표시 가능)
+        if len(st.session_state.points) > 1:
+            last_p = st.session_state.points[-1]
+            prev_p = st.session_state.points[-2]
+            dt = (last_p["Time"] - prev_p["Time"]) / 60
+            if dt > 0:
+                ror = (last_p["Temp"] - prev_p["Temp"]) / dt
+                st.metric("📈 현재 RoR", f"{ror:.1f} ℃/min")
 
-                    # ✅ 시작과 동시에 예열(Preheat) 자동 기록 (Time=0)
-                    st.session_state.points = [{
-                        "Time": 0,
-                        "Temp": int(initial_temp),
-                        "Gas": 0.0,
-                        "Event": "예열(Preheat)",
-                        "Roast_ID": roast_id
-                    }]
-                    st.rerun()
-
-            else:
-                if st.button("⏹️ RESET (초기화)"):
-                    st.session_state.start_time = None
-                    st.session_state.timer_state = "idle"
-                    st.session_state.stop_elapsed = None
-                    st.session_state.points = []
-                    st.rerun()
-
-        def get_elapsed_now():
-            if st.session_state.timer_state == "stopped" and st.session_state.stop_elapsed is not None:
-                return int(st.session_state.stop_elapsed)
-            if st.session_state.timer_state == "running" and st.session_state.start_time is not None:
-                return int(time.time() - st.session_state.start_time)
-            return 0
-
-        elapsed = get_elapsed_now()
-        with t_col2:
-            st.metric("경과 시간", format_mmss(elapsed))
-
-        with t_col3:
-            # 화면 표시 업데이트용 (누르면 rerun)
-            if st.session_state.timer_state == "running":
-                if st.button("↻ 갱신"):
-                    st.rerun()
-
-        if st.session_state.timer_state == "stopped":
-            st.info("✅ Drop이 기록되어 타이머가 정지되었습니다. (다시 시작하려면 RESET)")
-
-        can_record = (st.session_state.timer_state == "running")
-
-        c1, c2, c3, c4, c5 = st.columns([1.2, 1, 1, 2, 1])
-        with c1:
-            st.text_input("현재 시간(표시) (Now)", value=format_mmss(elapsed), disabled=True)
-
-        with c2:
-            default_temp = int(st.session_state.points[-1]["Temp"]) if st.session_state.points else int(initial_temp)
-            temp = st.number_input("온도 (Temp)", 0, 300, default_temp, disabled=not can_record, key="auto_temp")
-
-        with c3:
-            last_gas = float(st.session_state.points[-1]["Gas"]) if st.session_state.points else 0.0
-            gas = st.number_input("가스 (Gas)", 0.0, 15.0, last_gas, step=0.1, disabled=not can_record, key="auto_gas")
-
-        with c4:
-            evt = st.selectbox("이벤트 (Event)", ["기록"] + EVT, disabled=not can_record, key="auto_evt")
-
-        with c5:
-            st.write("")
-            st.write("")
-            if st.button("기록 (Record)", type="primary", use_container_width=True, disabled=not can_record):
-                rec_time = int(time.time() - st.session_state.start_time)
-                chosen_evt = evt if evt != "기록" else None
-
-                st.session_state.points.append({
-                    "Time": rec_time,
-                    "Temp": temp,
-                    "Gas": gas,
-                    "Event": chosen_evt,
-                    "Roast_ID": roast_id
-                })
-
-                # ✅ Drop 기록 시 타이머 정지
-                if is_drop_event(chosen_evt):
-                    st.session_state.timer_state = "stopped"
-                    st.session_state.stop_elapsed = rec_time
-
+    # 타이머 컨트롤 버튼들
+    t_col1, t_col2 = st.columns([1, 4])
+    with t_col1:
+        if st.session_state.timer_state == "idle":
+            if st.button("▶️ START", type="primary", use_container_width=True):
+                st.session_state.start_time = time.time()
+                st.session_state.timer_state = "running"
+                st.session_state.points = [{
+                    "Time": 0, "Temp": int(initial_temp), "Gas": 0.0,
+                    "Event": "Charge", "Roast_ID": roast_id
+                }]
+                st.rerun()
+        else:
+            if st.button("⏹️ RESET", use_container_width=True):
+                st.session_state.start_time = None
+                st.session_state.timer_state = "idle"
+                st.session_state.points = []
                 st.rerun()
 
-        # ✅ 단계별 기록(고정) 타임라인 표시
-        if st.session_state.points:
-            dfp = pd.DataFrame(st.session_state.points).sort_values("Time").reset_index(drop=True)
-            ev = dfp[dfp["Event"].notna() & (dfp["Event"].astype(str).str.strip() != "")]
-            if not ev.empty:
-                timeline = ev[["Event", "Time"]].copy()
-                timeline["Time(mm:ss)"] = timeline["Time"].apply(format_mmss)
-                timeline["Δprev(sec)"] = timeline["Time"].diff().fillna(0).astype(int)
-                st.markdown("##### ⏱️ 단계 타임라인 (Timeline)")
-                st.dataframe(timeline[["Event", "Time(mm:ss)", "Time", "Δprev(sec)"]], use_container_width=True)
+    # 입력 섹션
+    can_record = (st.session_state.timer_state == "running")
+    c1, c2, c3, c4 = st.columns([1, 1, 2, 1])
+    with c1:
+        temp = st.number_input("온도(℃)", 0, 300, key="at_t", disabled=not can_record)
+    with c2:
+        gas = st.number_input("가스", 0.0, 15.0, step=0.1, key="at_g", disabled=not can_record)
+    with c3:
+        evt = st.selectbox("이벤트", ["(데이터만 기록)"] + EVT, key="at_e", disabled=not can_record)
+    with c4:
+        st.write("")
+        st.write("")
+        if st.button("기록", type="primary", use_container_width=True, disabled=not can_record):
+            rec_time = int(time.time() - st.session_state.start_time)
+            st.session_state.points.append({
+                "Time": rec_time, "Temp": temp, "Gas": gas,
+                "Event": evt if evt != "(데이터만 기록)" else None, "Roast_ID": roast_id
+            })
+            if is_drop_event(evt):
+                st.session_state.timer_state = "stopped"
+                st.session_state.stop_elapsed = rec_time
+            st.rerun()
+
+    # ✅ 단계별 타임라인 및 구간 경과 시간(Δ) 표
+    if st.session_state.points:
+        st.markdown("---")
+        st.markdown("##### ⏱️ 단계별 타임라인 (Timeline)")
+        dfp = pd.DataFrame(st.session_state.points).sort_values("Time")
+        # 이벤트가 있는 행만 추출
+        timeline_df = dfp[dfp["Event"].notna()].copy()
+        
+        if not timeline_df.empty:
+            # 1. 전체 시간 표시 (mm:ss)
+            timeline_df["전체 시간"] = timeline_df["Time"].apply(format_mmss)
+            
+            # 2. ✅ 구간 경과 시간 계산 (현재 이벤트 시간 - 이전 이벤트 시간)
+            timeline_df["구간 소요(초)"] = timeline_df["Time"].diff().fillna(timeline_df["Time"].iloc[0]).astype(int)
+            timeline_df["구간 소요(분:초)"] = timeline_df["구간 소요(초)"].apply(format_mmss)
+            
+            # 보기 좋게 열 이름 변경 및 선택
+            display_df = timeline_df[["Event", "전체 시간", "구간 소요(분:초)", "Temp", "Gas"]]
+            display_df.columns = ["이벤트", "⏱️ 누적 시간", "⏳ 구간 소요", "온도", "가스"]
+            
+            st.table(display_df) # 또는 st.dataframe(display_df, use_container_width=True)
 
     # -----------------------------------------------------
     # Manual
