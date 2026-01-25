@@ -7,7 +7,7 @@ import io
 import re
 import csv
 import time  # 시간 계산용
-
+from streamlit_autorefresh import st_autorefresh
 # =========================================================
 # 로고 설정 (✅ 프로젝트 폴더에 pco_logo.png 넣으면 적용)
 # =========================================================
