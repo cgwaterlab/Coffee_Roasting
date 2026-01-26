@@ -11,7 +11,7 @@ import time
 import numpy as np
 from PIL import Image
 
-# ✅ 실시간 갱신 필수 라이브러리
+# ✅ 실시간 갱신 라이브러리 체크
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:
@@ -24,12 +24,15 @@ LOGO_PATH = "pco_logo.png"
 st.set_page_config(page_title="Roasting Analysis Center Pro", layout="wide", page_icon="☕")
 
 # 한글 폰트 설정
-try:
-    plt.rcParams['font.family'] = 'Malgun Gothic'
-except:
-    plt.rcParams['font.family'] = 'AppleGothic'
-plt.rcParams['axes.unicode_minus'] = False
+def set_korean_font():
+    font_names = [f.name for f in fm.fontManager.ttflist]
+    if 'Malgun Gothic' in font_names: plt.rcParams['font.family'] = 'Malgun Gothic'
+    elif 'AppleGothic' in font_names: plt.rcParams['font.family'] = 'AppleGothic'
+    elif 'NanumGothic' in font_names: plt.rcParams['font.family'] = 'NanumGothic'
+    else: pass 
+    plt.rcParams['axes.unicode_minus'] = False
 
+set_korean_font()
 DEFAULT_DATA_FILE = 'saemmulter_roasting_db.csv'
 
 # =========================================================
@@ -45,7 +48,7 @@ if st.session_state.timer_state == "running":
     st_autorefresh(interval=1000, key="timer_refresher")
 
 # =========================================================
-# 3. 핵심 함수 모음 (계산 및 포맷)
+# 3. 핵심 함수 모음
 # =========================================================
 def format_mmss(seconds):
     if seconds is None or seconds < 0: return "00:00"
@@ -85,7 +88,7 @@ def load_and_standardize_csv(file, file_name_fallback):
         header_row_idx, delimiter, extracted_id = None, ",", None
         for i, line in enumerate(lines):
             if not line.strip(): continue
-            if "원두" in line or "bean" in line.lower():
+            if ("원두" in line) or ("bean" in line.lower()):
                 parts = [p.strip() for p in re.split(r"[,\t;]", line)]
                 if len(parts) > 1: extracted_id = parts[1]
             for d in [",", "\t", ";"]:
@@ -106,7 +109,7 @@ def get_template_csv():
     return """파일 이름,Sample_01\n날짜,2026-Jan-01\n원두 이름,Geisha\n로스터 이름,Sample Roaster\n방식,드럼\n결과무게,215\n비고,템플릿\n\nTime(sec),Temp(C),Gas,Event\n0,200,0.0,Preheat\n30,200,0.5,Charge\n60,90,5.0,TP\n300,150,4.0,Yellowing\n540,192,2.0,1C Start\n630,205,0,Drop\n"""
 
 # =========================================================
-# 4. 사이드바 (기존 유지)
+# 4. 사이드바
 # =========================================================
 if os.path.exists(LOGO_PATH): st.sidebar.image(LOGO_PATH, use_container_width=True)
 st.sidebar.markdown("### PERU COFFEE ORIGINS")
@@ -141,21 +144,21 @@ if uploaded_files:
 full_df = pd.concat(all_history, ignore_index=True) if all_history else pd.DataFrame()
 
 # =========================================================
-# 5. [신규] 전문가용 분석 엔진 (2단 분리 + RoR 곡선 + 구간분석)
+# 5. [전문가용] 분석 엔진 (2단 그래프 + 위상 분석)
 # =========================================================
 def plot_advanced_analysis(selected_ids, full_db):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, height_ratios=[3, 1])
-    plt.subplots_adjust(hspace=0.05) # 그래프 간격 좁히기
+    plt.subplots_adjust(hspace=0.05)
     
     colors = plt.cm.tab10.colors
-    phase_data = []
+    phase_data = [] # 구간 분석 데이터 저장소
 
     for i, rid in enumerate(selected_ids):
         df = full_db[full_db['Roast_ID'] == rid].sort_values('Time').reset_index(drop=True)
         if df.empty: continue
         
         color = colors[i % 10]
-        fill_style = (i % 2 == 0) # 교차 마커 스타일
+        fill_style = (i % 2 == 0)
 
         # --- 1. 상단: 온도 프로파일 ---
         t_1c = None
@@ -167,64 +170,54 @@ def plot_advanced_analysis(selected_ids, full_db):
             if check_is_crack(evt)[0] and t_1c is None: t_1c = r['Time']
             if "yellow" in evt and t_yellow is None: t_yellow = r['Time']
 
-        # 1차 팝 전(점) / 후(선) 그리기
         pre_df = df[df['Time'] <= (t_1c if t_1c else 99999)]
         m_face = color if fill_style else 'none'
         ax1.scatter(pre_df['Time'], pre_df['Temp'], marker='o', edgecolors=color, facecolors=m_face, s=40, alpha=0.7)
         
         if t_1c:
             post_df = df[df['Time'] >= t_1c]
-            ax1.plot(post_df['Time'], post_df['Temp'], color=color, lw=3, label=rid) # 범례용 라벨
-            # 별표
+            ax1.plot(post_df['Time'], post_df['Temp'], color=color, lw=3, label=rid)
             r_1c = df[df['Time'] == t_1c].iloc[0]
-            ax1.scatter(r_1c['Time'], r_1c['Temp'], marker='*', s=300, color='gold', edgecolors='black', zorder=10)
+            # ✅ [요청 반영] 별 안쪽 색상도 그래프 색상과 동일하게
+            ax1.scatter(r_1c['Time'], r_1c['Temp'], marker='*', s=350, color=color, edgecolors='black', zorder=10)
         else:
             ax1.plot(df['Time'], df['Temp'], color=color, lw=1, alpha=0.5, label=rid)
 
-        # --- 2. 하단: RoR 곡선 (스무딩 적용) ---
-        # RoR 계산: (현재온도 - 이전온도) / (현재시간 - 이전시간) * 60
+        # --- 2. 하단: RoR 곡선 (스무딩) ---
         df['dt'] = df['Time'].diff()
         df['dTemp'] = df['Temp'].diff()
         df['RoR'] = (df['dTemp'] / df['dt']) * 60
-        
-        # 스무딩 (Moving Average, window=3)
         df['RoR_Smooth'] = df['RoR'].rolling(window=3, center=True).mean()
-        
         ax2.plot(df['Time'], df['RoR_Smooth'], color=color, lw=1.5, alpha=0.8)
         
-        # --- 3. 구간 분석 데이터 수집 ---
+        # --- 3. 구간 분석 (데이터가 없어도 행은 추가) ---
+        # ✅ [요청 반영] 데이터가 부족해도 분석 표에 나오도록 처리
+        p_row = {"ID": rid, "Drying": "-", "Maillard": "-", "Development": "-", "Total Time": format_mmss(t_drop)}
+        
         if t_yellow and t_1c:
             drying_t = t_yellow
             maillard_t = t_1c - t_yellow
             dev_t = t_drop - t_1c
-            total_t = t_drop
-            phase_data.append({
-                "ID": rid,
-                "Drying": f"{format_mmss(drying_t)} ({drying_t/total_t*100:.1f}%)",
-                "Maillard": f"{format_mmss(maillard_t)} ({maillard_t/total_t*100:.1f}%)",
-                "Development": f"{format_mmss(dev_t)} ({dev_t/total_t*100:.1f}%)",
-                "Total Time": format_mmss(total_t)
-            })
+            p_row["Drying"] = f"{format_mmss(drying_t)} ({drying_t/t_drop*100:.1f}%)"
+            p_row["Maillard"] = f"{format_mmss(maillard_t)} ({maillard_t/t_drop*100:.1f}%)"
+            p_row["Development"] = f"{format_mmss(dev_t)} ({dev_t/t_drop*100:.1f}%)"
+        elif not t_yellow:
+            p_row["Drying"] = "Yellowing 없음"
+        elif not t_1c:
+            p_row["Development"] = "1C Start 없음"
+            
+        phase_data.append(p_row)
 
-    # 스타일링
-    ax1.set_ylabel("Temp (℃)")
-    ax1.legend(loc='lower right', title="Roast Profiles")
-    ax1.grid(True, ls='--', alpha=0.3)
-    
-    ax2.set_ylabel("RoR (℃/min)")
-    ax2.set_xlabel("Time (seconds)")
-    ax2.set_ylim(0, 30) # RoR 범위 고정 (보기 좋게)
-    ax2.grid(True, ls='--', alpha=0.3)
-    
+    ax1.set_ylabel("Temp (℃)"); ax1.legend(loc='lower right', title="Roast Profiles"); ax1.grid(True, ls='--', alpha=0.3)
+    ax2.set_ylabel("RoR (℃/min)"); ax2.set_xlabel("Time (seconds)"); ax2.set_ylim(0, 30); ax2.grid(True, ls='--', alpha=0.3)
     st.pyplot(fig)
     
-    # 구간 분석표 출력
     if phase_data:
         st.markdown("##### 📊 구간별 분석 (Phase Breakdown)")
         st.table(pd.DataFrame(phase_data).set_index("ID"))
 
 # =========================================================
-# 6. 실시간 로스팅 그래프 (기존 단일 그래프 유지)
+# 6. 실시간 로스팅 그래프 (단일)
 # =========================================================
 def plot_realtime_roast(df, ax, color, label, is_main=True):
     df = df.sort_values('Time')
@@ -232,7 +225,6 @@ def plot_realtime_roast(df, ax, color, label, is_main=True):
     for _, r in df.iterrows():
         if check_is_crack(r.get('Event', ""))[0]: t_1c = r['Time']; break
     
-    # 1차 팝 전후 시각화
     pre = df[df['Time'] <= (t_1c if t_1c else 9999)]
     ax.scatter(pre['Time'], pre['Temp'], c=color, s=50, alpha=0.7)
     
@@ -240,9 +232,9 @@ def plot_realtime_roast(df, ax, color, label, is_main=True):
         post = df[df['Time'] >= t_1c]
         ax.plot(post['Time'], post['Temp'], c=color, lw=4, label=label)
         r1c = df[df['Time']==t_1c].iloc[0]
+        # 실시간 모드에서는 눈에 잘 띄게 황금색 유지 (혹은 요청시 변경 가능)
         ax.scatter(r1c['Time'], r1c['Temp'], marker='*', s=500, c='gold', edgecolors='black', zorder=10)
     
-    # RoR Bar Chart (실시간용)
     if is_main and len(df) > 1:
         ax_r = ax.twinx()
         ax_r.set_ylim(0, 150); ax_r.axis('off')
@@ -262,7 +254,6 @@ if is_analysis_mode:
         uids = list(full_df['Roast_ID'].unique())
         selected_ids = st.multiselect("비교 분석할 Roast ID 선택", uids)
         if selected_ids:
-            # ✅ [변경] 분석 모드에서는 2단 그래프 함수 호출
             plot_advanced_analysis(selected_ids, full_df)
     else: st.info("데이터가 없습니다.")
 
@@ -289,6 +280,7 @@ else:
         el_all = int(now - st.session_state.start_time) if st.session_state.timer_state == "running" else st.session_state.stop_elapsed
         el_spl = int(now - st.session_state.last_record_time) if (st.session_state.timer_state == "running" and st.session_state.last_record_time) else 0
         
+        # 버튼 컨트롤 영역
         b1, b2, b3 = st.columns([1, 2, 2])
         if st.session_state.timer_state == "idle":
             if b1.button("▶️ START", type="primary"):
@@ -303,23 +295,27 @@ else:
         b2.metric("⏳ 전체 시간", format_mmss(el_all))
         b3.metric("⏱️ 구간 시간", format_mmss(el_spl))
 
-        # 입력 폼
+        # ✅ [요청 반영] 입력창과 기록 버튼 같은 높이에 배치 (1:1:2:1 비율)
+        st.write("---")
         can_rec = (st.session_state.timer_state == "running")
-        with st.form("rec", clear_on_submit=True):
-            f1, f2, f3, f4 = st.columns([1, 1, 2, 1])
-            cur_t = f1.number_input("온도", 0, 300, int(init_temp), disabled=not can_rec)
-            cur_g = f2.number_input("가스", 0.0, 15.0, step=0.1, disabled=not can_rec)
-            cur_e = f3.selectbox("이벤트", ["기록", "TP", "Yellowing", "1C Start", "1C End", "2C", "Drop"], disabled=not can_rec)
-            if f4.form_submit_button("기록"):
-                st.session_state.last_record_time = time.time()
-                rec_t = int(st.session_state.last_record_time - st.session_state.start_time)
-                st.session_state.points.append({"Time": rec_t, "Temp": cur_t, "Gas": cur_g, "Event": cur_e if cur_e != "기록" else None})
-                if is_drop_event(cur_e):
-                    st.session_state.timer_state = "stopped"; st.session_state.stop_elapsed = rec_t
-                st.rerun()
+        # 컬럼 비율 조정으로 버튼을 입력창 바로 옆에 붙임
+        f1, f2, f3, f4 = st.columns([1, 1, 2, 1]) 
+        
+        cur_t = f1.number_input("온도", 0, 300, int(init_temp), disabled=not can_rec, label_visibility="collapsed", placeholder="온도")
+        cur_g = f2.number_input("가스", 0.0, 15.0, step=0.1, disabled=not can_rec, label_visibility="collapsed", placeholder="가스")
+        cur_e = f3.selectbox("이벤트", ["기록", "TP", "Yellowing", "1C Start", "1C End", "2C", "Drop"], disabled=not can_rec, label_visibility="collapsed")
+        
+        # ✅ 기록 버튼: Primary(붉은색 계열) + Container Width(꽉 차게)
+        if f4.button("🔴 기록", type="primary", use_container_width=True, disabled=not can_rec):
+            st.session_state.last_record_time = time.time()
+            rec_t = int(st.session_state.last_record_time - st.session_state.start_time)
+            st.session_state.points.append({"Time": rec_t, "Temp": cur_t, "Gas": cur_g, "Event": cur_e if cur_e != "기록" else None})
+            if is_drop_event(cur_e):
+                st.session_state.timer_state = "stopped"; st.session_state.stop_elapsed = rec_t
+            st.rerun()
+            
     else:
         st.subheader("2. 수동 기록")
-        # (수동 로직 기존 유지)
         m1, m2, m3, m4, m5 = st.columns([1, 1, 1, 2, 1])
         t_sec = m1.number_input("분", 0) * 60 + m1.number_input("초", 0)
         temp = m2.number_input("온도", 0, 300, int(init_temp))
