@@ -7,6 +7,7 @@ import io
 import re
 import csv
 import time
+import numpy as np
 
 # ✅ 실시간 갱신 필수 라이브러리
 try:
@@ -67,6 +68,15 @@ def is_drop_event(e: str) -> bool:
     s = str(e).lower().strip()
     return ("drop" in s) or ("배출" in s)
 
+def get_dtr_feedback(dtr):
+    leaf_green = "#228B22" # 대표님이 요청하신 나뭇잎 색
+    if dtr < 10: msg = "⚠️ 언더 디벨롭 (Under Developed): 풋내나 떫은 맛이 날 수 있어요. 시간을 조금 더 늘려보세요."
+    elif dtr <= 15: msg = "🍓 노르딕/라이트 (Light): 꽃향기와 화사한 산미, 차(Tea) 같은 깔끔함이 특징이에요."
+    elif dtr <= 20: msg = "⚖️ 미디엄/밸런스 (Medium): 단맛과 산미가 가장 조화로운 황금 비율이에요! (추천)"
+    elif dtr <= 25: msg = "🍫 미디엄 다크 (Medium Dark): 산미는 줄고 바디감과 초콜릿 향이 살아나요."
+    else: msg = "🔥 다크 (Dark): 묵직한 바디감, 스모키함, 쌉쌀한 맛이 강조돼요."
+    return f"<span style='color:{leaf_green}; font-weight:bold; font-size:1.1em;'>{msg}</span>"
+
 def load_and_standardize_csv(file, file_name_fallback):
     try:
         file.seek(0); raw = file.read()
@@ -77,7 +87,7 @@ def load_and_standardize_csv(file, file_name_fallback):
             if not line.strip(): continue
             if ("원두" in line) or ("bean" in line.lower()):
                 parts = [p.strip() for p in re.split(r"[,\t;]", line)]
-                if len(parts) > 1 and parts[1]: extracted_id = parts[1]
+                if len(parts) > 1: extracted_id = parts[1]
             for d in [",", "\t", ";"]:
                 cells = [c.strip().lower() for c in line.split(d)]
                 if any(("time" in c) or ("시간" in c) for c in cells) and any(("temp" in c) or ("온도" in c) for c in cells):
@@ -94,11 +104,10 @@ def get_template_csv():
     return """파일 이름,Sample_01\n날짜,2026-Jan-01\n원두 이름,Geisha\n로스터 이름,Sample Roaster\n방식,드럼 (Drum)\n결과무게,215\n비고,템플릿\n\nTime(sec),Temp(C),Gas,Event\n0,200,0.0,Preheat\n30,200,0.5,Charge\n60,90,5.0,TP\n300,150,4.0,Yellowing\n540,192,2.0,1C Start\n630,205,0,Drop\n"""
 
 # =========================================================
-# 4. 사이드바 구성 (링크 및 레퍼런스 유지)
+# 4. 사이드바 구성 (인스타, 스토어 링크 유지)
 # =========================================================
 if os.path.exists(LOGO_PATH): st.sidebar.image(LOGO_PATH, use_container_width=True)
-st.sidebar.markdown("### PERU COFFEE ORIGINS")
-st.sidebar.info("**페루의 Micro/Nano Lot 최상급 커피를 소개합니다.**")
+st.sidebar.markdown("## 🇵🇪 PERU COFFEE ORIGINS")
 
 mode = st.sidebar.radio("모드 선택", ["📊 데이터 분석 (Analysis)", "🔥 로스팅 (Manual)", "⏱️ 로스팅 + 시계 (Auto-Timer)"], index=2)
 
@@ -127,34 +136,33 @@ if uploaded_files:
 full_df = pd.concat(all_history, ignore_index=True) if all_history else pd.DataFrame()
 
 # =========================================================
-# 5. 핵심 그래프 시각화 엔진 (데이터 분석/실시간 공용)
+# 5. 핵심 그래프 시각화 엔진 (교차 마커 및 별표 적용)
 # =========================================================
-def plot_professional_roast(df, ax, color, label, is_main=True):
+def plot_professional_roast(df, ax, color, label, is_main=True, fill_marker=True):
     df = df.sort_values('Time').copy()
-    # 이벤트 위치 찾기
     t_1c = None
     for _, r in df.iterrows():
         if check_is_crack(r.get('Event', ""))[0] and t_1c is None:
             t_1c = r['Time']; break
 
-    # 1. 1차 팝 이전: 점(Scatter)으로만 표시 (교차 마커)
+    # 1. 1차 팝 이전: 선 없이 점만 표시
     pre_df = df[df['Time'] <= (t_1c if t_1c is not None else 99999)]
     for i, (idx, row) in enumerate(pre_df.iterrows()):
-        m_face = color if i % 2 == 0 else 'none'
+        m_face = color if fill_marker else 'none'
         ax.scatter(row['Time'], row['Temp'], marker='o', edgecolors=color, facecolors=m_face, s=50, alpha=0.8, zorder=3)
 
-    # 2. 1차 팝 이후: 실선으로 연결 및 교차 점 표시
+    # 2. 1차 팝 이후: 실선으로 연결
     if t_1c is not None:
         post_df = df[df['Time'] >= t_1c]
         ax.plot(post_df['Time'], post_df['Temp'], color=color, lw=4 if is_main else 2, alpha=0.7, label=label, zorder=2)
         for i, (idx, row) in enumerate(post_df.iterrows()):
-            m_face = color if i % 2 == 0 else 'none'
+            m_face = color if fill_marker else 'none'
             ax.scatter(row['Time'], row['Temp'], marker='o', edgecolors=color, facecolors=m_face, s=60, alpha=0.9, zorder=3)
 
     # 3. 이벤트 강조 (텍스트 및 별표)
     for _, row in df.iterrows():
         e = row.get('Event', "")
-        if pd.isna(e) or e == "" or e == "nan": continue
+        if pd.isna(e) or e == "" or str(e).lower() == "nan": continue
         
         is1s, is1e, is2s = check_is_crack(e)
         t_lbl = format_mmss(row['Time'])
@@ -163,13 +171,13 @@ def plot_professional_roast(df, ax, color, label, is_main=True):
             ax.scatter(row['Time'], row['Temp'], marker='*', s=500, color='#f1c40f', edgecolors='black', zorder=10)
             ax.annotate(f"★ 1C Start\n({t_lbl})", (row['Time'], row['Temp']), xytext=(0, 20), textcoords='offset points', ha='center', weight='bold', color='#f39c12')
         elif is1e: # 1차 팝 종료
-            ax.annotate(f"1C End\n({t_lbl})", (row['Time'], row['Temp']), xytext=(0, -25), textcoords='offset points', ha='center', color='#d35400', fontsize=9)
+            ax.annotate(f"1C End ({t_lbl})", (row['Time'], row['Temp']), xytext=(0, -25), textcoords='offset points', ha='center', color='#d35400', fontsize=9)
         elif is2s: # 2차 팝 시작
-            ax.annotate(f"2C Start\n({t_lbl})", (row['Time'], row['Temp']), xytext=(0, 20), textcoords='offset points', ha='center', weight='bold', color='#8e44ad')
+            ax.annotate(f"2C Start ({t_lbl})", (row['Time'], row['Temp']), xytext=(0, 20), textcoords='offset points', ha='center', weight='bold', color='#8e44ad')
         elif is_drop_event(e): # 배출
             ax.annotate(f"DROP ({t_lbl})", (row['Time'], row['Temp']), xytext=(15, 0), textcoords='offset points', va='center', weight='bold', color='red')
         else: # 기타 (TP, Yellow 등)
-            ax.annotate(e, (row['Time'], row['Temp']), xytext=(0, 15), textcoords='offset points', ha='center', fontsize=8, alpha=0.7)
+            if is_main: ax.annotate(e, (row['Time'], row['Temp']), xytext=(0, 15), textcoords='offset points', ha='center', fontsize=8, alpha=0.7)
 
 # =========================================================
 # 6. 모드별 로직
@@ -178,14 +186,17 @@ if mode == "📊 데이터 분석 (Analysis)":
     st.title("📊 Data Analysis Center")
     if not full_df.empty:
         uids = list(full_df['Roast_ID'].unique())
-        selected_ids = st.multiselect(f"비교 분석할 그래프 선택 ({len(uids)}개)", uids)
+        selected_ids = st.multiselect(f"비교 분석할 Roast ID 선택 ({len(uids)}개)", uids)
         if selected_ids:
             fig, ax1 = plt.subplots(figsize=(12, 7))
             colors = plt.cm.tab10.colors
             for i, rid in enumerate(selected_ids):
                 target_df = full_df[full_df['Roast_ID'] == rid]
-                plot_professional_roast(target_df, ax1, colors[i%10], rid, is_main=True)
+                # 파일별로 마커 속 채우기 여부 결정 (교차 적용)
+                fill = (i % 2 == 0)
+                plot_professional_roast(target_df, ax1, colors[i%10], rid, is_main=True, fill_marker=fill)
             ax1.set_xlabel("Time (s)"); ax1.set_ylabel("Temp (℃)"); ax1.grid(True, ls='--', alpha=0.4)
+            ax1.legend(loc='upper left', title="파일 이름 (Legend)")
             st.pyplot(fig)
     else: st.info("데이터가 없습니다. CSV 파일을 업로드하세요.")
 
@@ -236,25 +247,60 @@ else:
                     st.session_state.timer_state = "stopped"; st.session_state.stop_elapsed = rec_t
                 st.rerun()
 
-    # 그래프 출력 (레퍼런스 포함)
+    # 그래프 출력 (실시간 모드)
     if st.session_state.points:
         st.write("---")
         fig, ax = plt.subplots(figsize=(12, 7))
         if ref_id and ref_id != "(선택 안 함)":
-            plot_professional_roast(full_df[full_df['Roast_ID']==ref_id], ax, "gray", f"Ref: {ref_id}", is_main=False)
-        plot_professional_roast(pd.DataFrame(st.session_state.points), ax, "#c0392b", "Current", is_main=True)
+            plot_professional_roast(full_df[full_df['Roast_ID']==ref_id], ax, "gray", f"Ref: {ref_id}", is_main=False, fill_marker=False)
+        plot_professional_roast(pd.DataFrame(st.session_state.points), ax, "#c0392b", "Current", is_main=True, fill_marker=True)
         ax.set_xlabel("Time (s)"); ax.set_ylabel("Temp (℃)"); ax.grid(True, ls='--', alpha=0.3)
         st.pyplot(fig)
 
 # =========================================================
-# 7. 저장 섹션
+# 7. 저장 및 결과 분석 섹션 (요청사항 3번 반영)
 # =========================================================
-if st.session_state.timer_state == "stopped" and st.session_state.points:
-    st.subheader("3. 결과 분석 및 저장")
-    df_final = pd.DataFrame(st.session_state.points).sort_values('Time')
-    # DTR 계산 등 기존 저장 로직 수행
-    rw = st.number_input("배출 무게 (g)", 0.0)
-    if st.button("💾 최종 저장하기", type="primary"):
-        df_final['Roast_ID'] = roast_id
-        df_final.to_csv(DEFAULT_DATA_FILE, mode='a', header=not os.path.exists(DEFAULT_DATA_FILE), index=False, encoding='utf-8-sig')
-        st.success("저장 완료!"); st.session_state.points = []; st.session_state.timer_state = "idle"; st.rerun()
+if not is_analysis_mode and st.session_state.points:
+    st.subheader("3. 결과 분석 및 저장 (Result & QC)")
+    c1, c2, c3 = st.columns([1, 2, 1])
+    df_f = pd.DataFrame(st.session_state.points).sort_values('Time')
+    t_1c_f = next((r['Time'] for _, r in df_f.iterrows() if check_is_crack(r['Event'])[0]), None)
+
+    with c1:
+        rw = st.number_input("배출무게 (Output Weight, g)", 0.0)
+        if rw > 0 and green_weight > 0:
+            lw = green_weight - rw; last_t = df_f.iloc[-1]['Temp']
+            # 샘물터 전용 열량 계산 공식 적용
+            q = (lw*2260 + rw*1.6*(last_t-25))/1000
+            st.info(f"🔥 흡수 열량: {q:.1f} kJ")
+            yield_rate = (rw / green_weight) * 100
+            st.metric("수율 (Yield)", f"{yield_rate:.1f}%")
+
+    with c2:
+        if t_1c_f:
+            total_t = df_f.iloc[-1]['Time']
+            dev_time = total_t - t_1c_f
+            dtr = (dev_time / total_t) * 100
+            st.markdown(f"""
+            <div style="background-color:#f9fdf9; padding:15px; border-radius:10px; border:2px solid #228B22; margin-bottom:10px;">
+                <strong style="color:#228B22; font-size:1.2em;">📊 DTR: {dtr:.1f}%</strong><br>
+                {get_dtr_feedback(dtr)}
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.warning("1차 팝이 기록되지 않아 DTR을 계산할 수 없습니다.")
+
+    with c3:
+        note = st.text_input("비고 (이용 열량 및 품질 메모)")
+        save_name = st.text_input("파일 이름", value=f"Roasting_{get_intl_date_str()}_{bean_name}")
+        buf = io.StringIO()
+        buf.write(f"파일 이름,{save_name}\n원두,{bean_name}\n로스터,{r1c3.value if 'r1c3' in locals() else ''}\n결과무게,{rw}\n비고,{note}\n\n")
+        df_f[['Time','Temp','Gas','Event']].rename(columns={'Time':'Time(sec)','Temp':'Temp(C)'}).to_csv(buf, index=False)
+        
+        def on_save():
+            df_save = df_f.copy(); df_save['Roast_ID'] = roast_id
+            m = 'a' if os.path.exists(DEFAULT_DATA_FILE) else 'w'
+            df_save.to_csv(DEFAULT_DATA_FILE, mode=m, header=(m=='w'), index=False, encoding='utf-8-sig')
+            st.session_state.points = []; st.session_state.timer_state = "idle"; st.success("저장 완료!")
+
+        st.download_button("💾 CSV 저장 및 다운로드", buf.getvalue().encode('utf-8-sig'), f"{save_name}.csv", "text/csv", type="primary", on_click=on_save, use_container_width=True)
