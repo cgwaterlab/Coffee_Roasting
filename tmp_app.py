@@ -11,7 +11,7 @@ import time
 import numpy as np
 from PIL import Image
 
-# ✅ 실시간 갱신 라이브러리 체크
+# ✅ 실시간 갱신 필수 라이브러리
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:
@@ -113,7 +113,7 @@ def get_template_csv():
 # =========================================================
 if os.path.exists(LOGO_PATH): st.sidebar.image(LOGO_PATH, use_container_width=True)
 st.sidebar.markdown("### PERU COFFEE ORIGINS")
-st.sidebar.info("**페루의 Micro/Nano Lot 최상급 스페셜티 커피를 소개합니다. 좋은 커피 농장에서 직접 수입해 농장의 수익을 창출합니다.**")
+st.sidebar.info("**페루의 Micro/Nano Lot 최상급 스페셜티 커피를 소개합니다.**")
 
 mode = st.sidebar.radio("모드 선택", ["📊 데이터 분석 (Analysis)", "🔥 로스팅 (Manual)", "⏱️ 로스팅 + 시계 (Auto-Timer)"], index=2)
 
@@ -144,11 +144,14 @@ if uploaded_files:
 full_df = pd.concat(all_history, ignore_index=True) if all_history else pd.DataFrame()
 
 # =========================================================
-# 5. [전문가용] 분석 엔진 (2단 그래프)
+# 5. [전문가용] 분석 엔진 (이벤트 표시 + 가스 점선 추가)
 # =========================================================
 def plot_advanced_analysis(selected_ids, full_db):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, height_ratios=[3, 1])
     plt.subplots_adjust(hspace=0.05)
+    
+    # ✅ 가스 압력을 그리기 위한 오른쪽 축(Twin Axis) 생성
+    ax1_gas = ax1.twinx()
     
     colors = plt.cm.tab10.colors
     phase_data = [] 
@@ -160,7 +163,7 @@ def plot_advanced_analysis(selected_ids, full_db):
         color = colors[i % 10]
         fill_style = (i % 2 == 0)
 
-        # 1. 상단: 온도 프로파일
+        # --- 1. 상단: 온도 프로파일 ---
         t_1c = None
         t_yellow = None
         t_drop = df.iloc[-1]['Time']
@@ -182,14 +185,37 @@ def plot_advanced_analysis(selected_ids, full_db):
         else:
             ax1.plot(df['Time'], df['Temp'], color=color, lw=1, alpha=0.5, label=rid)
 
-        # 2. 하단: RoR 곡선
+        # ✅ [추가] 가스 압력 점선 (Dotted Line)
+        if 'Gas' in df.columns:
+            ax1_gas.plot(df['Time'], df['Gas'], color=color, linestyle=':', alpha=0.5, lw=1.5)
+
+        # ✅ [복구] 이벤트 텍스트 표시 (Charge, TP 등)
+        for _, row in df.iterrows():
+            e = str(row.get('Event', ""))
+            # Nan 제거 로직 강화
+            if not e or e.lower() in ["nan", "none", "", "null"]: continue
+            
+            # 이벤트 텍스트 출력
+            is1s, is1e, is2s = check_is_crack(e)
+            t_lbl = format_mmss(row['Time'])
+            
+            # 그래프가 복잡하므로 텍스트 위치를 조금씩 조정하거나 단순화
+            if is1s: 
+                ax1.annotate(f"★ 1C ({t_lbl})", (row['Time'], row['Temp']), xytext=(0, 20), textcoords='offset points', ha='center', weight='bold', color=color)
+            elif is_drop_event(e): 
+                ax1.annotate(f"DROP", (row['Time'], row['Temp']), xytext=(10, 0), textcoords='offset points', va='center', weight='bold', color='red')
+            else: 
+                # 일반 이벤트 (Charge, TP, Yellowing 등)
+                ax1.annotate(e, (row['Time'], row['Temp']), xytext=(0, 10), textcoords='offset points', ha='center', fontsize=8, alpha=0.8, color='black')
+
+        # --- 2. 하단: RoR 곡선 (스무딩) ---
         df['dt'] = df['Time'].diff()
         df['dTemp'] = df['Temp'].diff()
         df['RoR'] = (df['dTemp'] / df['dt']) * 60
         df['RoR_Smooth'] = df['RoR'].rolling(window=3, center=True).mean()
         ax2.plot(df['Time'], df['RoR_Smooth'], color=color, lw=1.5, alpha=0.8)
         
-        # 3. 구간 분석
+        # --- 3. 구간 분석 ---
         p_row = {"ID": rid, "Drying": "-", "Maillard": "-", "Development": "-", "Total Time": format_mmss(t_drop)}
         if t_yellow and t_1c:
             drying_t = t_yellow
@@ -203,6 +229,7 @@ def plot_advanced_analysis(selected_ids, full_db):
         phase_data.append(p_row)
 
     ax1.set_ylabel("Temp (℃)"); ax1.legend(loc='lower right', title="Roast Profiles"); ax1.grid(True, ls='--', alpha=0.3)
+    ax1_gas.set_ylabel("Gas (kPa)"); ax1_gas.set_ylim(0, 15) # 가스축 범위 설정
     ax2.set_ylabel("RoR (℃/min)"); ax2.set_xlabel("Time (seconds)"); ax2.set_ylim(0, 30); ax2.grid(True, ls='--', alpha=0.3)
     st.pyplot(fig)
     
@@ -211,7 +238,7 @@ def plot_advanced_analysis(selected_ids, full_db):
         st.table(pd.DataFrame(phase_data).set_index("ID"))
 
 # =========================================================
-# 6. 실시간 로스팅 그래프 (단일)
+# 6. 실시간 로스팅 그래프 (가스 점선 포함)
 # =========================================================
 def plot_realtime_roast(df, ax, color, label, is_main=True):
     df = df.sort_values('Time')
@@ -219,6 +246,7 @@ def plot_realtime_roast(df, ax, color, label, is_main=True):
     for _, r in df.iterrows():
         if check_is_crack(r.get('Event', ""))[0]: t_1c = r['Time']; break
     
+    # 온도 그래프
     pre = df[df['Time'] <= (t_1c if t_1c else 9999)]
     ax.scatter(pre['Time'], pre['Temp'], c=color, s=50, alpha=0.7)
     
@@ -228,15 +256,19 @@ def plot_realtime_roast(df, ax, color, label, is_main=True):
         r1c = df[df['Time']==t_1c].iloc[0]
         ax.scatter(r1c['Time'], r1c['Temp'], marker='*', s=500, c='gold', edgecolors='black', zorder=10)
     
+    # ✅ [요청 반영] 실시간에서도 가스(Gas)를 점선으로 표시 (오른쪽 축)
     if is_main and len(df) > 1:
-        ax_r = ax.twinx()
-        ax_r.set_ylim(0, 150); ax_r.axis('off')
-        for i in range(1, len(df)):
-            dt = (df.iloc[i]['Time'] - df.iloc[i-1]['Time']) / 60
-            if dt > 0:
-                ror = (df.iloc[i]['Temp'] - df.iloc[i-1]['Temp']) / dt
-                col = 'green' if ror < 15 else 'red'
-                ax_r.bar(df.iloc[i]['Time'], ror, width=10, color=col, alpha=0.2)
+        ax_gas = ax.twinx()
+        ax_gas.set_ylim(0, 15)
+        ax_gas.set_ylabel("Gas", color='blue')
+        # 점선 그래프
+        ax_gas.plot(df['Time'], df['Gas'], color='blue', linestyle=':', label='Gas', alpha=0.6)
+        
+        # 텍스트 라벨 (Charge, TP 등)
+        for _, row in df.iterrows():
+            e = str(row.get('Event', ""))
+            if e and e.lower() not in ["nan", "none", "", "기록"]:
+                ax.annotate(e, (row['Time'], row['Temp']), xytext=(0, 15), textcoords='offset points', ha='center')
 
 # =========================================================
 # 7. 메인 실행 로직
@@ -259,27 +291,14 @@ else:
     with st.expander("1. 로스팅 설정 (Setup)", expanded=True):
         intl_date = get_intl_date_str()
         r1, r2, r3, r4 = st.columns(4)
-        bean_name = r1.text_input("원두명 (Bean)", "Geisha")
+        bean_name = r1.text_input("원두명", "Geisha")
         roast_id = r2.text_input("ID", f"{bean_name}_{intl_date}")
-        roaster_name = r3.text_input("로스터 (Roaster)", "")
-        
-        # ✅ [요청 반영] 로스팅 방식 추가 및 영문 병기
-        method_options = [
-            "Drum (드럼)", 
-            "Hot Air (열풍)", 
-            "Hybrid (하이브리드)", 
-            "Direct Fire (직화)", 
-            "Handy Roaster (Direct Fire/핸디로스터)", 
-            "Mesh Hand Roaster (Direct Fire/수망)", 
-            "Other (기타)"
-        ]
-        method = r4.selectbox("방식 (Method)", method_options)
-        
+        roaster_name = r3.text_input("로스터", "")
+        method_opts = ["Drum (드럼)", "Hot Air (열풍)", "Hybrid (하이브리드)", "Direct Fire (직화)", "Handy Roaster (핸디)", "Mesh (수망)", "Other"]
+        method = r4.selectbox("방식", method_opts)
         c1, c2 = st.columns(2)
         init_temp = c1.number_input("투입온도(℃)", 200)
-        
-        # ✅ [요청 반영] 생두 무게 0.1g 단위, 최소값 0.0부터 (50g 등 소량 가능)
-        green_weight = c2.number_input("생두무게 (g)", min_value=0.0, value=250.0, step=0.1, format="%.1f")
+        green_weight = c2.number_input("생두무게(g)", min_value=0.0, value=250.0, step=0.1, format="%.1f")
 
     if is_auto_mode:
         st.subheader("2. 실시간 기록 (Double Timer)")
@@ -301,7 +320,6 @@ else:
         b2.metric("⏳ 전체 시간", format_mmss(el_all))
         b3.metric("⏱️ 구간 시간", format_mmss(el_spl))
 
-        # 기록 버튼 UI (같은 높이)
         st.write("---")
         can_rec = (st.session_state.timer_state == "running")
         f1, f2, f3, f4 = st.columns([1, 1, 2, 1])
@@ -347,8 +365,7 @@ if not is_analysis_mode and st.session_state.points:
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c1:
-        # ✅ [요청 반영] 배출 무게도 0.1g 단위 + 0.0부터 시작 가능
-        rw = st.number_input("배출 무게 (g)", min_value=0.0, value=0.0, step=0.1, format="%.1f")
+        rw = st.number_input("배출 무게 (g)", 0.0, step=0.1, format="%.1f")
         if rw > 0 and green_weight > 0:
             q = ((green_weight-rw)*2260 + rw*1.6*(df_f.iloc[-1]['Temp']-25))/1000
             st.info(f"🔥 흡수 열량: {q:.1f} kJ")
