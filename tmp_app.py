@@ -113,7 +113,7 @@ def get_template_csv():
 # =========================================================
 if os.path.exists(LOGO_PATH): st.sidebar.image(LOGO_PATH, use_container_width=True)
 st.sidebar.markdown("### PERU COFFEE ORIGINS")
-st.sidebar.info("**페루의 Micro/Nano Lot 최상급 스페셜티 커피를 소개합니다.**")
+st.sidebar.info("**페루의 Micro/Nano Lot 최상급 스페셜티 커피를 소개합니다. 좋은 커피 농장에서 직접 수입해 농장의 수익을 창출합니다.**")
 
 mode = st.sidebar.radio("모드 선택", ["📊 데이터 분석 (Analysis)", "🔥 로스팅 (Manual)", "⏱️ 로스팅 + 시계 (Auto-Timer)"], index=2)
 
