@@ -144,14 +144,14 @@ if uploaded_files:
 full_df = pd.concat(all_history, ignore_index=True) if all_history else pd.DataFrame()
 
 # =========================================================
-# 5. [전문가용] 분석 엔진 (2단 그래프 + 위상 분석)
+# 5. [전문가용] 분석 엔진 (2단 그래프)
 # =========================================================
 def plot_advanced_analysis(selected_ids, full_db):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, height_ratios=[3, 1])
     plt.subplots_adjust(hspace=0.05)
     
     colors = plt.cm.tab10.colors
-    phase_data = [] # 구간 분석 데이터 저장소
+    phase_data = [] 
 
     for i, rid in enumerate(selected_ids):
         df = full_db[full_db['Roast_ID'] == rid].sort_values('Time').reset_index(drop=True)
@@ -160,7 +160,7 @@ def plot_advanced_analysis(selected_ids, full_db):
         color = colors[i % 10]
         fill_style = (i % 2 == 0)
 
-        # --- 1. 상단: 온도 프로파일 ---
+        # 1. 상단: 온도 프로파일
         t_1c = None
         t_yellow = None
         t_drop = df.iloc[-1]['Time']
@@ -178,22 +178,19 @@ def plot_advanced_analysis(selected_ids, full_db):
             post_df = df[df['Time'] >= t_1c]
             ax1.plot(post_df['Time'], post_df['Temp'], color=color, lw=3, label=rid)
             r_1c = df[df['Time'] == t_1c].iloc[0]
-            # ✅ [요청 반영] 별 안쪽 색상도 그래프 색상과 동일하게
             ax1.scatter(r_1c['Time'], r_1c['Temp'], marker='*', s=350, color=color, edgecolors='black', zorder=10)
         else:
             ax1.plot(df['Time'], df['Temp'], color=color, lw=1, alpha=0.5, label=rid)
 
-        # --- 2. 하단: RoR 곡선 (스무딩) ---
+        # 2. 하단: RoR 곡선
         df['dt'] = df['Time'].diff()
         df['dTemp'] = df['Temp'].diff()
         df['RoR'] = (df['dTemp'] / df['dt']) * 60
         df['RoR_Smooth'] = df['RoR'].rolling(window=3, center=True).mean()
         ax2.plot(df['Time'], df['RoR_Smooth'], color=color, lw=1.5, alpha=0.8)
         
-        # --- 3. 구간 분석 (데이터가 없어도 행은 추가) ---
-        # ✅ [요청 반영] 데이터가 부족해도 분석 표에 나오도록 처리
+        # 3. 구간 분석
         p_row = {"ID": rid, "Drying": "-", "Maillard": "-", "Development": "-", "Total Time": format_mmss(t_drop)}
-        
         if t_yellow and t_1c:
             drying_t = t_yellow
             maillard_t = t_1c - t_yellow
@@ -201,11 +198,8 @@ def plot_advanced_analysis(selected_ids, full_db):
             p_row["Drying"] = f"{format_mmss(drying_t)} ({drying_t/t_drop*100:.1f}%)"
             p_row["Maillard"] = f"{format_mmss(maillard_t)} ({maillard_t/t_drop*100:.1f}%)"
             p_row["Development"] = f"{format_mmss(dev_t)} ({dev_t/t_drop*100:.1f}%)"
-        elif not t_yellow:
-            p_row["Drying"] = "Yellowing 없음"
-        elif not t_1c:
-            p_row["Development"] = "1C Start 없음"
-            
+        elif not t_yellow: p_row["Drying"] = "Yellowing 없음"
+        elif not t_1c: p_row["Development"] = "1C Start 없음"
         phase_data.append(p_row)
 
     ax1.set_ylabel("Temp (℃)"); ax1.legend(loc='lower right', title="Roast Profiles"); ax1.grid(True, ls='--', alpha=0.3)
@@ -232,7 +226,6 @@ def plot_realtime_roast(df, ax, color, label, is_main=True):
         post = df[df['Time'] >= t_1c]
         ax.plot(post['Time'], post['Temp'], c=color, lw=4, label=label)
         r1c = df[df['Time']==t_1c].iloc[0]
-        # 실시간 모드에서는 눈에 잘 띄게 황금색 유지 (혹은 요청시 변경 가능)
         ax.scatter(r1c['Time'], r1c['Temp'], marker='*', s=500, c='gold', edgecolors='black', zorder=10)
     
     if is_main and len(df) > 1:
@@ -266,13 +259,27 @@ else:
     with st.expander("1. 로스팅 설정 (Setup)", expanded=True):
         intl_date = get_intl_date_str()
         r1, r2, r3, r4 = st.columns(4)
-        bean_name = r1.text_input("원두명", "Geisha")
+        bean_name = r1.text_input("원두명 (Bean)", "Geisha")
         roast_id = r2.text_input("ID", f"{bean_name}_{intl_date}")
-        roaster_name = r3.text_input("로스터", "")
-        method = r4.selectbox("방식", ["드럼", "열풍", "직화", "하이브리드"])
+        roaster_name = r3.text_input("로스터 (Roaster)", "")
+        
+        # ✅ [요청 반영] 로스팅 방식 추가 및 영문 병기
+        method_options = [
+            "Drum (드럼)", 
+            "Hot Air (열풍)", 
+            "Hybrid (하이브리드)", 
+            "Direct Fire (직화)", 
+            "Handy Roaster (Direct Fire/핸디로스터)", 
+            "Mesh Hand Roaster (Direct Fire/수망)", 
+            "Other (기타)"
+        ]
+        method = r4.selectbox("방식 (Method)", method_options)
+        
         c1, c2 = st.columns(2)
         init_temp = c1.number_input("투입온도(℃)", 200)
-        green_weight = c2.number_input("생두무게(g)", 250.0, step=0.1, format="%.1f")
+        
+        # ✅ [요청 반영] 생두 무게 0.1g 단위, 최소값 0.0부터 (50g 등 소량 가능)
+        green_weight = c2.number_input("생두무게 (g)", min_value=0.0, value=250.0, step=0.1, format="%.1f")
 
     if is_auto_mode:
         st.subheader("2. 실시간 기록 (Double Timer)")
@@ -280,7 +287,6 @@ else:
         el_all = int(now - st.session_state.start_time) if st.session_state.timer_state == "running" else st.session_state.stop_elapsed
         el_spl = int(now - st.session_state.last_record_time) if (st.session_state.timer_state == "running" and st.session_state.last_record_time) else 0
         
-        # 버튼 컨트롤 영역
         b1, b2, b3 = st.columns([1, 2, 2])
         if st.session_state.timer_state == "idle":
             if b1.button("▶️ START", type="primary"):
@@ -295,17 +301,14 @@ else:
         b2.metric("⏳ 전체 시간", format_mmss(el_all))
         b3.metric("⏱️ 구간 시간", format_mmss(el_spl))
 
-        # ✅ [요청 반영] 입력창과 기록 버튼 같은 높이에 배치 (1:1:2:1 비율)
+        # 기록 버튼 UI (같은 높이)
         st.write("---")
         can_rec = (st.session_state.timer_state == "running")
-        # 컬럼 비율 조정으로 버튼을 입력창 바로 옆에 붙임
-        f1, f2, f3, f4 = st.columns([1, 1, 2, 1]) 
-        
+        f1, f2, f3, f4 = st.columns([1, 1, 2, 1])
         cur_t = f1.number_input("온도", 0, 300, int(init_temp), disabled=not can_rec, label_visibility="collapsed", placeholder="온도")
         cur_g = f2.number_input("가스", 0.0, 15.0, step=0.1, disabled=not can_rec, label_visibility="collapsed", placeholder="가스")
         cur_e = f3.selectbox("이벤트", ["기록", "TP", "Yellowing", "1C Start", "1C End", "2C", "Drop"], disabled=not can_rec, label_visibility="collapsed")
         
-        # ✅ 기록 버튼: Primary(붉은색 계열) + Container Width(꽉 차게)
         if f4.button("🔴 기록", type="primary", use_container_width=True, disabled=not can_rec):
             st.session_state.last_record_time = time.time()
             rec_t = int(st.session_state.last_record_time - st.session_state.start_time)
@@ -313,7 +316,6 @@ else:
             if is_drop_event(cur_e):
                 st.session_state.timer_state = "stopped"; st.session_state.stop_elapsed = rec_t
             st.rerun()
-            
     else:
         st.subheader("2. 수동 기록")
         m1, m2, m3, m4, m5 = st.columns([1, 1, 1, 2, 1])
@@ -345,7 +347,8 @@ if not is_analysis_mode and st.session_state.points:
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c1:
-        rw = st.number_input("배출 무게 (g)", 0.0, step=0.1, format="%.1f")
+        # ✅ [요청 반영] 배출 무게도 0.1g 단위 + 0.0부터 시작 가능
+        rw = st.number_input("배출 무게 (g)", min_value=0.0, value=0.0, step=0.1, format="%.1f")
         if rw > 0 and green_weight > 0:
             q = ((green_weight-rw)*2260 + rw*1.6*(df_f.iloc[-1]['Temp']-25))/1000
             st.info(f"🔥 흡수 열량: {q:.1f} kJ")
