@@ -144,13 +144,13 @@ if uploaded_files:
 full_df = pd.concat(all_history, ignore_index=True) if all_history else pd.DataFrame()
 
 # =========================================================
-# 5. [전문가용] 분석 엔진 (이벤트 표시 + 가스 점선 추가)
+# 5. [전문가용] 분석 엔진 (계단식 가스 그래프 적용)
 # =========================================================
 def plot_advanced_analysis(selected_ids, full_db):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, height_ratios=[3, 1])
     plt.subplots_adjust(hspace=0.05)
     
-    # ✅ 가스 압력을 그리기 위한 오른쪽 축(Twin Axis) 생성
+    # 가스 압력용 오른쪽 축
     ax1_gas = ax1.twinx()
     
     colors = plt.cm.tab10.colors
@@ -181,31 +181,28 @@ def plot_advanced_analysis(selected_ids, full_db):
             post_df = df[df['Time'] >= t_1c]
             ax1.plot(post_df['Time'], post_df['Temp'], color=color, lw=3, label=rid)
             r_1c = df[df['Time'] == t_1c].iloc[0]
+            # 별 색상을 그래프 색과 일치
             ax1.scatter(r_1c['Time'], r_1c['Temp'], marker='*', s=350, color=color, edgecolors='black', zorder=10)
         else:
             ax1.plot(df['Time'], df['Temp'], color=color, lw=1, alpha=0.5, label=rid)
 
-        # ✅ [추가] 가스 압력 점선 (Dotted Line)
+        # ✅ [수정] 가스 압력: 계단식(drawstyle='steps-post') 점선
         if 'Gas' in df.columns:
-            ax1_gas.plot(df['Time'], df['Gas'], color=color, linestyle=':', alpha=0.5, lw=1.5)
+            ax1_gas.plot(df['Time'], df['Gas'], color=color, linestyle=':', alpha=0.5, lw=1.5, drawstyle='steps-post')
 
-        # ✅ [복구] 이벤트 텍스트 표시 (Charge, TP 등)
+        # 이벤트 텍스트
         for _, row in df.iterrows():
             e = str(row.get('Event', ""))
-            # Nan 제거 로직 강화
             if not e or e.lower() in ["nan", "none", "", "null"]: continue
             
-            # 이벤트 텍스트 출력
             is1s, is1e, is2s = check_is_crack(e)
             t_lbl = format_mmss(row['Time'])
             
-            # 그래프가 복잡하므로 텍스트 위치를 조금씩 조정하거나 단순화
             if is1s: 
                 ax1.annotate(f"★ 1C ({t_lbl})", (row['Time'], row['Temp']), xytext=(0, 20), textcoords='offset points', ha='center', weight='bold', color=color)
             elif is_drop_event(e): 
                 ax1.annotate(f"DROP", (row['Time'], row['Temp']), xytext=(10, 0), textcoords='offset points', va='center', weight='bold', color='red')
             else: 
-                # 일반 이벤트 (Charge, TP, Yellowing 등)
                 ax1.annotate(e, (row['Time'], row['Temp']), xytext=(0, 10), textcoords='offset points', ha='center', fontsize=8, alpha=0.8, color='black')
 
         # --- 2. 하단: RoR 곡선 (스무딩) ---
@@ -229,7 +226,7 @@ def plot_advanced_analysis(selected_ids, full_db):
         phase_data.append(p_row)
 
     ax1.set_ylabel("Temp (℃)"); ax1.legend(loc='lower right', title="Roast Profiles"); ax1.grid(True, ls='--', alpha=0.3)
-    ax1_gas.set_ylabel("Gas (kPa)"); ax1_gas.set_ylim(0, 15) # 가스축 범위 설정
+    ax1_gas.set_ylabel("Gas (kPa)"); ax1_gas.set_ylim(0, 15) 
     ax2.set_ylabel("RoR (℃/min)"); ax2.set_xlabel("Time (seconds)"); ax2.set_ylim(0, 30); ax2.grid(True, ls='--', alpha=0.3)
     st.pyplot(fig)
     
@@ -238,7 +235,7 @@ def plot_advanced_analysis(selected_ids, full_db):
         st.table(pd.DataFrame(phase_data).set_index("ID"))
 
 # =========================================================
-# 6. 실시간 로스팅 그래프 (가스 점선 포함)
+# 6. 실시간 로스팅 그래프 (계단식 가스 포함)
 # =========================================================
 def plot_realtime_roast(df, ax, color, label, is_main=True):
     df = df.sort_values('Time')
@@ -246,7 +243,6 @@ def plot_realtime_roast(df, ax, color, label, is_main=True):
     for _, r in df.iterrows():
         if check_is_crack(r.get('Event', ""))[0]: t_1c = r['Time']; break
     
-    # 온도 그래프
     pre = df[df['Time'] <= (t_1c if t_1c else 9999)]
     ax.scatter(pre['Time'], pre['Temp'], c=color, s=50, alpha=0.7)
     
@@ -256,15 +252,13 @@ def plot_realtime_roast(df, ax, color, label, is_main=True):
         r1c = df[df['Time']==t_1c].iloc[0]
         ax.scatter(r1c['Time'], r1c['Temp'], marker='*', s=500, c='gold', edgecolors='black', zorder=10)
     
-    # ✅ [요청 반영] 실시간에서도 가스(Gas)를 점선으로 표시 (오른쪽 축)
+    # ✅ [수정] 실시간 가스: 계단식 점선 (drawstyle='steps-post')
     if is_main and len(df) > 1:
         ax_gas = ax.twinx()
         ax_gas.set_ylim(0, 15)
         ax_gas.set_ylabel("Gas", color='blue')
-        # 점선 그래프
-        ax_gas.plot(df['Time'], df['Gas'], color='blue', linestyle=':', label='Gas', alpha=0.6)
+        ax_gas.plot(df['Time'], df['Gas'], color='blue', linestyle=':', label='Gas', alpha=0.6, drawstyle='steps-post')
         
-        # 텍스트 라벨 (Charge, TP 등)
         for _, row in df.iterrows():
             e = str(row.get('Event', ""))
             if e and e.lower() not in ["nan", "none", "", "기록"]:
@@ -344,7 +338,6 @@ else:
         if m5.button("추가"):
             st.session_state.points.append({"Time": t_sec, "Temp": temp, "Gas": gas, "Event": evt if evt != "기록" else None})
 
-    # 그래프 (실시간용)
     if st.session_state.points:
         st.write("---")
         fig, ax = plt.subplots(figsize=(12, 7))
