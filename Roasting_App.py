@@ -11,7 +11,7 @@ import time
 import numpy as np
 from PIL import Image
 
-# ✅ 실시간 갱신 필수 라이브러리
+# ✅ 실시간 갱신 라이브러리 체크
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:
@@ -59,11 +59,13 @@ def get_intl_date_str():
     now = datetime.now()
     return f"{now.year}{now.month:02d}{now.day:02d}"
 
+# ✅ [수정] 이벤트 감지 로직 강화 (다양한 표현 수용)
 def check_is_crack(event_str):
     e = str(event_str).lower().strip()
-    is_1c = any(k in e for k in ["1c start", "1st pop", "1차 팝 시작", "1c s"])
-    is_1c_end = any(k in e for k in ["1c end", "1차 팝 종료", "1c e"])
-    is_2c = any(k in e for k in ["2c", "2차 팝", "second pop", "2c s"])
+    # 1차 팝: 1c, 1st, pop, first 등의 단어가 포함되면 인정
+    is_1c = any(k in e for k in ["1c", "1st", "pop", "first", "1차"]) and not ("end" in e or "종료" in e)
+    is_1c_end = any(k in e for k in ["1c end", "1차 팝 종료", "end", "휴지기"])
+    is_2c = any(k in e for k in ["2c", "2차", "second"])
     return is_1c, is_1c_end, is_2c
 
 def is_drop_event(e: str) -> bool:
@@ -113,7 +115,7 @@ def get_template_csv():
 # =========================================================
 if os.path.exists(LOGO_PATH): st.sidebar.image(LOGO_PATH, use_container_width=True)
 st.sidebar.markdown("### PERU COFFEE ORIGINS")
-st.sidebar.info("**페루의 Micro/Nano Lot 최상급 스페셜티 커피를 소개합니다. 지속 가능한 커피 문화를 위해 최고의 농장과 함께합니다.**")
+st.sidebar.info("**페루의 Micro/Nano Lot 최상급 스페셜티 커피를 소개합니다.**")
 
 mode = st.sidebar.radio("모드 선택", ["📊 데이터 분석 (Analysis)", "🔥 로스팅 (Manual)", "⏱️ 로스팅 + 시계 (Auto-Timer)"], index=2)
 
@@ -144,14 +146,14 @@ if uploaded_files:
 full_df = pd.concat(all_history, ignore_index=True) if all_history else pd.DataFrame()
 
 # =========================================================
-# 5. [전문가용] 분석 엔진 (에너지 그래프 + 속 빈 삼각형)
+# 5. [전문가용] 분석 엔진 (그래프 그리기 로직 개선)
 # =========================================================
 def plot_advanced_analysis(selected_ids, full_db):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, height_ratios=[3, 1])
     plt.subplots_adjust(hspace=0.05)
     
-    ax1_gas = ax1.twinx() # 상단: 가스용
-    ax2_energy = ax2.twinx() # 하단: 에너지용 (New!)
+    ax1_gas = ax1.twinx()
+    ax2_energy = ax2.twinx()
     
     colors = plt.cm.tab10.colors
     phase_data = [] 
@@ -173,18 +175,28 @@ def plot_advanced_analysis(selected_ids, full_db):
             if check_is_crack(evt)[0] and t_1c is None: t_1c = r['Time']
             if "yellow" in evt and t_yellow is None: t_yellow = r['Time']
 
-        pre_df = df[df['Time'] <= (t_1c if t_1c else 99999)]
-        m_face = color if fill_style else 'none'
-        ax1.scatter(pre_df['Time'], pre_df['Temp'], marker='o', edgecolors=color, facecolors=m_face, s=40, alpha=0.7)
-        
-        if t_1c:
+        # ✅ [수정] 1차 팝이 감지되지 않아도 그래프가 끊기지 않도록 처리
+        if t_1c is None:
+            # 1차 팝이 없으면 전체를 하나의 실선으로 그림
+            ax1.plot(df['Time'], df['Temp'], color=color, lw=2, alpha=0.7, label=rid)
+            # 점은 교차 스타일로
+            m_face = color if fill_style else 'none'
+            ax1.scatter(df['Time'], df['Temp'], marker='o', edgecolors=color, facecolors=m_face, s=40, alpha=0.6)
+        else:
+            # 1차 팝이 있으면: 전반부(점) + 후반부(굵은 선)
+            pre_df = df[df['Time'] <= t_1c]
             post_df = df[df['Time'] >= t_1c]
+            
+            # 전반부 (점)
+            m_face = color if fill_style else 'none'
+            ax1.scatter(pre_df['Time'], pre_df['Temp'], marker='o', edgecolors=color, facecolors=m_face, s=40, alpha=0.7)
+            
+            # 후반부 (선 + 별표)
             ax1.plot(post_df['Time'], post_df['Temp'], color=color, lw=3, label=rid)
             r_1c = df[df['Time'] == t_1c].iloc[0]
             ax1.scatter(r_1c['Time'], r_1c['Temp'], marker='*', s=350, color=color, edgecolors='black', zorder=10)
-        else:
-            ax1.plot(df['Time'], df['Temp'], color=color, lw=1, alpha=0.5, label=rid)
 
+        # 가스 압력 (계단식)
         if 'Gas' in df.columns:
             ax1_gas.plot(df['Time'], df['Gas'], color=color, linestyle=':', alpha=0.5, lw=1.5, drawstyle='steps-post')
 
@@ -201,28 +213,17 @@ def plot_advanced_analysis(selected_ids, full_db):
             else: 
                 ax1.annotate(e, (row['Time'], row['Temp']), xytext=(0, 10), textcoords='offset points', ha='center', fontsize=8, alpha=0.8, color='black')
 
-        # --- 2. 하단: RoR 및 에너지 ---
+        # --- 2. 하단: RoR 곡선 ---
         df['dt'] = df['Time'].diff()
         df['dTemp'] = df['Temp'].diff()
         df['RoR'] = (df['dTemp'] / df['dt']) * 60
         df['RoR_Smooth'] = df['RoR'].rolling(window=3, center=True).mean()
-        
-        # RoR (왼쪽 축)
         ax2.plot(df['Time'], df['RoR_Smooth'], color=color, lw=1.5, alpha=0.8)
         
-        # ✅ [New] 에너지 그래프 (오른쪽 축, 속 빈 삼각형)
-        # 약식 에너지 계산: Q = m * c * (T - T_room). m은 250g -> 215g 등으로 선형 감소 가정
-        # 정밀 계산을 위해 비열 1.6, 룸온도 25도 가정
-        mass_start = 250 # 기본값 (데이터에 없으면)
-        mass_end = 215   # 기본값
-        
-        # 선형 질량 감소 모델
-        mass_series = np.linspace(mass_start, mass_end, len(df)) 
-        energy_series = (mass_series * 1.6 * (df['Temp'] - 25)) / 1000 # kJ
-        
-        ax2_energy.plot(df['Time'], energy_series, color=color, linestyle='--', linewidth=0.5, alpha=0.5)
-        # 포인트는 띄엄띄엄 찍어서 가독성 확보 (10개 데이터마다 1개)
-        ax2_energy.scatter(df['Time'][::10], energy_series[::10], marker='^', color='none', edgecolors=color, s=30, alpha=0.8, label='Energy(kJ)')
+        # 에너지 그래프 (속 빈 삼각형)
+        mass_series = np.linspace(250, 215, len(df)) # 간이 질량 모델
+        energy_series = (mass_series * 1.6 * (df['Temp'] - 25)) / 1000
+        ax2_energy.scatter(df['Time'][::15], energy_series[::15], marker='^', color='none', edgecolors=color, s=30, alpha=0.6, label='Energy')
 
         # --- 3. 구간 분석 ---
         p_row = {"ID": rid, "Drying": "-", "Maillard": "-", "Development": "-", "Total Time": format_mmss(t_drop)}
@@ -237,17 +238,16 @@ def plot_advanced_analysis(selected_ids, full_db):
 
     ax1.set_ylabel("Temp (℃)"); ax1.legend(loc='lower right', title="Roast Profiles"); ax1.grid(True, ls='--', alpha=0.3)
     ax1_gas.set_ylabel("Gas (kPa)"); ax1_gas.set_ylim(0, 15)
-    
     ax2.set_ylabel("RoR (℃/min)"); ax2.set_xlabel("Time (seconds)"); ax2.set_ylim(0, 30); ax2.grid(True, ls='--', alpha=0.3)
     ax2_energy.set_ylabel("Energy (kJ)"); 
-    
     st.pyplot(fig)
+    
     if phase_data:
         st.markdown("##### 📊 구간별 분석 (Phase Breakdown)")
         st.table(pd.DataFrame(phase_data).set_index("ID"))
 
 # =========================================================
-# 6. 실시간 그래프
+# 6. 실시간 로스팅 그래프
 # =========================================================
 def plot_realtime_roast(df, ax, color, label, is_main=True):
     df = df.sort_values('Time')
@@ -338,17 +338,13 @@ else:
             st.rerun()
     else:
         st.subheader("2. 수동 기록")
-        # ✅ [요청 반영] 매뉴얼 모드도 자동 모드와 비슷한 UI (일렬 배치 + 강조 버튼) 적용
         m1, m2, m3, m4, m5 = st.columns([1, 1, 2, 2, 1])
-        t_min = m1.number_input("분", 0, 60, 0, label_visibility="collapsed")
-        t_sec = m2.number_input("초", 0, 59, 0, label_visibility="collapsed")
-        temp = m3.number_input("온도", 0, 300, int(init_temp), label_visibility="collapsed")
-        gas = m4.number_input("가스", 0.0, 15.0, step=0.1, label_visibility="collapsed")
-        
-        # 버튼을 Primary로 변경하여 강조
+        t_sec = m1.number_input("분", 0) * 60 + m1.number_input("초", 0)
+        temp = m2.number_input("온도", 0, 300, int(init_temp))
+        gas = m3.number_input("가스", 0.0, 15.0, step=0.1)
+        evt = m4.selectbox("이벤트", ["기록", "TP", "Yellowing", "1C Start", "1C End", "2C", "Drop"])
         if m5.button("➕ 추가", type="primary", use_container_width=True):
-            t_total = t_min * 60 + t_sec
-            st.session_state.points.append({"Time": t_total, "Temp": temp, "Gas": gas, "Event": None})
+            st.session_state.points.append({"Time": t_sec, "Temp": temp, "Gas": gas, "Event": evt if evt != "기록" else None})
 
     if st.session_state.points:
         st.write("---")
@@ -360,7 +356,7 @@ else:
         st.pyplot(fig)
 
 # =========================================================
-# 8. QC 결과 저장 (비고란 자동 완성 추가)
+# 8. QC 결과 저장
 # =========================================================
 if not is_analysis_mode and st.session_state.points:
     st.markdown("---")
@@ -369,11 +365,8 @@ if not is_analysis_mode and st.session_state.points:
     t_1c_f = next((r['Time'] for _, r in df_f.iterrows() if check_is_crack(r.get('Event', ""))[0]), None)
 
     c1, c2, c3 = st.columns([1, 2, 1])
-    
-    # ✅ [요청 반영] 비고란 자동 완성을 위한 변수 미리 계산
-    q_val = 0.0
-    yield_val = 0.0
-    rw = 0.0
+    # 미리 계산 (비고란 자동완성용)
+    q_val = 0.0; yield_val = 0.0; rw = 0.0
     
     with c1:
         rw = st.number_input("배출 무게 (g)", min_value=0.0, value=0.0, step=0.1, format="%.1f")
@@ -392,15 +385,12 @@ if not is_analysis_mode and st.session_state.points:
         if st.checkbox("아그트론 분석"):
             st.info("촬영 가이드: 색상표 포함"); st.camera_input("촬영")
         
-        # ✅ [요청 반영] 계산된 물성 데이터를 미리 문구로 만들어 비고란에 넣음
         auto_note = ""
-        if rw > 0:
-            auto_note = f"[시스템 기록] 수율: {yield_val:.1f}% | 열량: {q_val:.1f}kJ | 수분감소: {100-yield_val:.1f}%"
-        
+        if rw > 0: auto_note = f"[시스템 기록] 수율: {yield_val:.1f}% | 열량: {q_val:.1f}kJ | 수분감소: {100-yield_val:.1f}%"
         note = st.text_area("비고 (자동계산 + 메모)", value=auto_note, height=100)
         
         if st.button("💾 저장", type="primary"):
             df_f['Roast_ID'] = roast_id
-            df_f['Note'] = note # 비고도 데이터에 포함
+            df_f['Note'] = note
             df_f.to_csv(DEFAULT_DATA_FILE, mode='a', header=not os.path.exists(DEFAULT_DATA_FILE), index=False, encoding='utf-8-sig')
             st.success("완료!"); st.session_state.points=[]; st.session_state.timer_state="idle"; st.rerun()
